@@ -12,8 +12,8 @@
 # contract does not pin down (see the final report for the full list):
 #   - CCR_ADMIN_USER and CCR_AGENT_USER get standard useradd home
 #     directories, i.e. /home/<user>.
-#   - The failure message for a missing CCR_ADMIN_PUBKEY contains the
-#     substring "locked out" somewhere in stdout/stderr (case-insensitive).
+#   - The failure message for a missing CCR_ADMIN_PUBKEY explains the lockout
+#     risk, matched on the substring "lock the operator out" (case-insensitive).
 set -Eeuo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -134,7 +134,7 @@ run_case out1 rc1 "$RUNTIME" run --rm -v "${PROV_DIR}:/repo:ro" "$IMAGE_TAG" bas
 # shellcheck disable=SC2154
 assert_fails "run without CCR_ADMIN_PUBKEY exits non-zero" "$rc1"
 # shellcheck disable=SC2154
-assert_contains "missing-key message mentions being locked out" "${out1,,}" "locked out"
+assert_contains "missing-key message explains the lockout risk" "${out1,,}" "lock the operator out"
 
 run_case out2 rc2 "$RUNTIME" run --rm -e "CCR_ADMIN_PUBKEY=${RSA_KEY}" -v "${PROV_DIR}:/repo:ro" "$IMAGE_TAG" bash /repo/provision.sh
 # shellcheck disable=SC2154
