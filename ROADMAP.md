@@ -133,3 +133,22 @@ finished yet — exceptions: D-04 and D-05, see there.
 | D-07 | Full three-factor chain on every pairing | **Yes, without exception.** No reduced tier for "trusted networks" | Phase 7 | End of Phase 7 |
 | D-08 | MD5 vs. SHA-256 for file hashes | **SHA-256** — already fixed as non-negotiable in the prompt | Phase 5 | — |
 | D-09 | Documentation language | **English throughout** (wiki, READMEs, script output, commit messages), because the repo is public. The German original of the architecture doc is preserved as `docs/ARCHITECTURE.de.md`. | all phases | any time, but costly |
+
+---
+
+## Specification gaps
+
+Places where `docs/ARCHITECTURE.md` is **silent**, found while writing the wiki in
+Phase 0. These are not architecture changes and not disagreements with the doc — they
+are decisions the doc defers, which the implementing phase has to make explicitly rather
+than by accident. Each must be resolved *before* the listed phase is declared done, and
+the resolution recorded here as a `D-xx` row.
+
+| ID | Gap | Why it matters | Resolve in |
+|---|---|---|---|
+| G-01 | A running tmux session can exist **without** a terminal lock — created manually via `tmux new`, or predating the daemon. The lock directory is therefore not a complete picture of session state. | Section 4.4 already treats this as the reason not to auto-reboot on idle, but never says how the gap arises or whether the idle check should additionally consult `tmux ls` instead of trusting locks alone. Getting this wrong either blocks updates forever or kills a live session. | Phase 3 |
+| G-02 | Auth mechanism for the `/files/*` endpoints is unspecified. | Section 8.1 defines the allowlist and the `agent`-user sandboxing, but never says whether file requests use the same Ed25519 challenge-response as the WebSocket, a token derived from it, or something else. An unauthenticated file API would bypass the entire device-pairing model. | Phase 5 |
+| G-03 | Step-up re-auth protocol is unspecified. | Section 10 lists *which* actions require step-up but not the mechanics: a fresh WebAuthn ceremony per action, or a short-lived step-up token with a TTL? A token with too long a TTL silently degrades step-up into a single prompt per session. | Phase 7 |
+| G-04 | "Short-lived session key" for the web client is undefined. | Section 5.4 rules out persistent key storage in the browser but gives no lifetime, no reissue rule, and no scope (per tab? per login?). | Phase 7/8 |
+| G-05 | The `post-checkout` / `post-merge` hook bodies for `agentctl init` are described in prose only. | Low risk — the doc states the intent clearly, the implementation is straightforward. Recorded so the hooks are written deliberately rather than improvised. | Phase 2 |
+| G-06 | The `inotifywait` watcher on `from-agent/` is explicitly marked "optional" in Section 7.3. | Needs a yes/no decision rather than silently shipping or silently skipping it. | Phase 5 |
