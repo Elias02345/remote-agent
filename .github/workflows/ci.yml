@@ -1,0 +1,56 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  shellcheck:
+    name: Shell lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install shellcheck
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y shellcheck
+
+      - name: bash -n syntax check
+        run: |
+          set -euo pipefail
+          status=0
+          while IFS= read -r -d '' f; do
+            echo "syntax check: ${f}"
+            bash -n "$f" || status=1
+          done < <(find . -path ./.git -prune -o -name '*.sh' -print0)
+          exit "$status"
+
+      - name: shellcheck
+        run: |
+          set -euo pipefail
+          status=0
+          while IFS= read -r -d '' f; do
+            echo "shellcheck: ${f}"
+            shellcheck "$f" || status=1
+          done < <(find . -path ./.git -prune -o -name '*.sh' -print0)
+          exit "$status"
+
+  # ponytail: this job now runs for real. It was originally left out with a
+  # "prove it locally first" comment, but there is no local Docker/Podman on
+  # the machine developing this repo (WSL2 Ubuntu, shellcheck only) --
+  # ubuntu-latest is the only place that can actually execute this harness,
+  # so deferring it further would mean it never runs at all. Gated behind
+  # `needs: shellcheck` so a lint error fails fast without paying for an
+  # Arch container pull + provisioning run.
+  provisioning-harness:
+    name: Provisioning container harness
+    needs: shellcheck
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Run provisioning test harness
+        run: server-provisioning/test/run-tests.sh

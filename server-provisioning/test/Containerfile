@@ -1,0 +1,27 @@
+# server-provisioning/test/Containerfile
+#
+# Minimal Arch Linux image for exercising provision.sh in isolation.
+#
+# - No systemd as init, and no attempt to make the container boot systemd:
+#   the "systemd not usable as init" code path in provision.sh is deliberately
+#   exercised by this harness, not worked around.
+# - Nothing is copied in. run-tests.sh bind-mounts server-provisioning/ at
+#   /repo at container-run time, so editing provision.sh or lib/common.sh
+#   never requires an image rebuild.
+# - provision.sh installs its own runtime packages (openssh, sudo, fail2ban,
+#   ...) via pacman, so this image only needs to be able to run bash and let
+#   pacman itself work -- it does not pre-install the packages under test.
+#   The one exception is `openssl`: run-tests.sh uses `openssl passwd -6`
+#   to generate a throwaway crypt hash for the CCR_ADMIN_PASSWORD_HASH
+#   positive test, which is test-harness tooling, not part of provision.sh.
+FROM archlinux:base
+
+# ponytail: disable pacman signature checking for this image only. This is a
+# throwaway container rebuilt from a fresh archlinux:base on every test run,
+# not a deployed system -- keyring/mirror sync flakiness is a bigger
+# practical risk here than a tampered mirror. provision.sh itself never
+# touches pacman.conf, so this has no effect on real-server behavior.
+RUN sed -i 's/^#\?SigLevel.*/SigLevel = Never/' /etc/pacman.conf \
+    && pacman -Sy --noconfirm --needed openssl
+
+WORKDIR /repo
