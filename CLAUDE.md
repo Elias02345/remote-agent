@@ -1,120 +1,129 @@
-# CLAUDE.md — Projektkonventionen ClaudeCode Remote
+# CLAUDE.md — Project Conventions ClaudeCode Remote
 
-Diese Datei ist die Arbeitsanweisung für jede künftige Agent-Session (Claude Code,
-Codex, Antigravity) in diesem Repo. Sie ergänzt die globale `~/.claude/CLAUDE.md`.
+This file is the work order for every future agent session (Claude Code,
+Codex, Antigravity) in this repo. It extends the global `~/.claude/CLAUDE.md`.
 
-## Quelle der Wahrheit
+## Source of truth
 
-`docs/ARCHITECTURE.md` ist die vollständige, bereits abgestimmte Architektur­entscheidung.
-Jede technische Entscheidung darin ist **verbindlich** — nicht neu verhandeln, nicht durch
-eine "bessere Idee" ersetzen, außer der Nutzer bittet ausdrücklich darum.
-Änderungen an `docs/ARCHITECTURE.md` nur nach Rücksprache.
+`docs/ARCHITECTURE.md` is the complete, already-agreed architecture decision.
+Every technical decision in it is **binding** — do not renegotiate it, do not
+replace it with a "better idea", unless the user explicitly asks for that.
+Changes to `docs/ARCHITECTURE.md` only after consultation.
 
-`ROADMAP.md` hält den Phasenstatus und alle getroffenen offenen Entscheidungen fest.
-`TODO_FOR_USER.md` sammelt alles, was nur der Mensch tun kann.
+`ROADMAP.md` tracks phase status and all decisions made on open questions.
+`TODO_FOR_USER.md` collects everything only the human can do.
 
-## Rolle
+## Role
 
-Leitender Entwickler für ein Mehrkomponenten-System:
+Lead developer for a multi-component system:
 
-| Komponente | Verzeichnis | Technik |
+| Component | Directory | Tech |
 |---|---|---|
-| Arch-Linux-Server als Agent-Base-Station | `server-provisioning/` | Bash, systemd |
-| Terminal-Session- und Datei-Daemon | `daemon/` | Go |
-| Client-App Android/Windows/Linux/Web | `app/` | Flutter, `xterm.dart` |
-| Öffentlicher HTTPS-Zugang hinter CGNAT | — | CloudGate (separates Projekt) |
+| Arch Linux server as agent base station | `server-provisioning/` | Bash, systemd |
+| Terminal session and file daemon | `daemon/` | Go |
+| Client app Android/Windows/Linux/Web | `app/` | Flutter, `xterm.dart` |
+| Public HTTPS access behind CGNAT | — | CloudGate (separate project) |
 
-## Nicht verhandelbare Entscheidungen
+## Non-negotiable decisions
 
-1. **Terminal-Transport**: roher PTY-Passthrough über `tmux attach-session`, byteweise
-   über WebSocket. **Kein** tmux Control Mode (`-CC`) — das ist ein iTerm2-spezifisches,
-   strukturiertes Protokoll und für einen generischen Client ungeeignet.
-2. **Terminal-Emulation** ausschließlich clientseitig (`xterm.dart` / `xterm.js`).
-   Niemals serverseitig interpretieren, parsen oder vereinfachen.
-3. **Persistenzschicht ist tmux selbst**, kein eigenes PTY-Session-Management.
-   `set -g window-size latest`, damit sich die Session an das zuletzt aktive Gerät anpasst.
-4. **Zwei Lock-Typen mit unterschiedlicher Lebensdauer**, niemals vermischen:
-   - Agent-Locks (`agent-<pid>`): automatisch per Shell-Wrapper mit `trap EXIT`,
-     Stale-Cleanup nach 6 h.
-   - Terminal-Locks (`terminal-<session-id>`): unbegrenzt, nur manuelles Schließen
-     entfernt sie. Kein Stale-Cleanup.
-5. **Backups sind nicht an die Idle-Lock-Logik gekoppelt** — sie laufen unabhängig und
-   häufiger, weil sie nichts Destruktives tun. Nur System-/Paket-Updates warten auf Idle.
-6. **Datei-Hashes: SHA-256** (nicht MD5). Verifikation vor dem Senden UND nach dem
-   Empfang, plus Rückvergleich des serverseitig berechneten Hash beim Client.
-7. **CloudGate-Anbindung**: kein eigener Relay-Server. CloudGate wird als fertiger
-   Baustein per Host-Eintrag im **Tunnel-Modus** genutzt. TLS terminiert an Cloudflares
-   Edge; der Daemon lauscht intern auf Klartext-HTTP, gebunden an `localhost` bzw. das
-   Tailscale-Interface.
-8. **Drei-Faktor-Auth** (E-Mail+Passwort + TOTP + Passkey) gilt nur für Geräte-Pairing
-   und sicherheitskritische Einzelaktionen (Step-Up) — niemals für den laufenden
-   Alltagsbetrieb bereits gepaarter Geräte. Dafür reicht Ed25519-Challenge-Response.
-9. **SMB/NFS-Freigaben** ausschließlich über das Tailscale-Interface, niemals über
-   CloudGate oder das öffentliche Internet.
-10. **Linux-Passkey-Lücke**: FIDO2-Hardware-Key (YubiKey o. ä.) als Fallback einplanen.
+1. **Terminal transport**: raw PTY passthrough over `tmux attach-session`,
+   byte-for-byte over WebSocket. **No** tmux Control Mode (`-CC`) — that is an
+   iTerm2-specific, structured protocol and unsuitable for a generic client.
+2. **Terminal emulation** exclusively client-side (`xterm.dart` / `xterm.js`).
+   Never interpret, parse, or simplify it server-side.
+3. **The persistence layer is tmux itself**, no custom PTY session management.
+   `set -g window-size latest`, so the session adapts to the most recently
+   active device.
+4. **Two lock types with different lifetimes**, never mixed:
+   - Agent locks (`agent-<pid>`): automatic via shell wrapper with
+     `trap EXIT`, stale cleanup after 6 h.
+   - Terminal locks (`terminal-<session-id>`): unlimited, only manual closing
+     removes them. No stale cleanup.
+5. **Backups are not coupled to the idle-lock logic** — they run independently
+   and more frequently, because they do nothing destructive. Only
+   system/package updates wait for idle.
+6. **File hashes: SHA-256** (not MD5). Verification before sending AND after
+   receiving, plus a comparison against the server-side computed hash on the
+   client.
+7. **CloudGate connection**: no own relay server. CloudGate is used as a
+   finished building block via a host entry in **tunnel mode**. TLS
+   terminates at Cloudflare's edge; the daemon listens internally on
+   plaintext HTTP, bound to `localhost` or the Tailscale interface.
+8. **Three-factor auth** (email+password + TOTP + passkey) applies only to
+   device pairing and security-critical single actions (step-up) — never to
+   day-to-day operation of already-paired devices. `Ed25519` challenge-response
+   is sufficient for that.
+9. **SMB/NFS shares** exclusively over the Tailscale interface, never over
+   CloudGate or the public internet.
+10. **Linux passkey gap**: plan for a FIDO2 hardware key (`YubiKey` or similar)
+    as a fallback.
 
-## Sicherheits-Leitplanken (immer gültig, phasenunabhängig)
+## Security guardrails (always apply, phase-independent)
 
-- Kein Prozess läuft als root außer den explizit dafür vorgesehenen systemd-Units.
-- Keine Geheimnisse (API-Tokens, Passwort-Hashes, private Keys) in Git.
-  `.gitignore` + `.env.example` statt echter `.env` von Anfang an.
-- Kein Endpunkt akzeptiert beliebige Shell-Kommandos aus der App — nur die eng
-  spezifizierten Aktionen aus Abschnitt 8.4 der Architekturdoku.
-- Jeder neue Netzwerk-Listener bindet standardmäßig an `localhost` oder das
-  Tailscale-Interface, **niemals** an `0.0.0.0`, außer explizit als CloudGate-Host vorgesehen.
-- Rate-Limiting und Lockout bei allen Auth-Endpunkten von Anfang an, nicht als Add-on.
+- No process runs as root except the systemd units explicitly designated for it.
+- No secrets (API tokens, password hashes, private keys) in Git.
+  `.gitignore` + `.env.example` instead of a real `.env` from the start.
+- No endpoint accepts arbitrary shell commands from the app — only the
+  narrowly specified actions from Section 8.4 of the architecture doc.
+- Every new network listener binds to `localhost` or the Tailscale interface
+  by default, **never** to `0.0.0.0`, unless explicitly designated as a
+  CloudGate host.
+- Rate limiting and lockout on all auth endpoints from the start, not as an
+  add-on.
 
-## Was nicht getan wird
+## What will not be done
 
-- Keine eigene Terminal-Emulation/-Interpretation im Daemon, "nur um es einfacher zu machen".
-- Keine Kernel-Updates oder Reboots automatisch auslösen, auch nicht bei Idle —
-  nur das `reboot-pending`-Flag setzen.
-- Kein Zurückfallen auf MD5 als alleinige Integritätsprüfung ohne Kommentar im Code
-  oder Commit-Text.
-- Keine eigene Relay-/Tunnel-Infrastruktur parallel zu CloudGate.
-- Keine stillschweigenden Abkürzungen bei der Drei-Faktor-Kette fürs Pairing, auch nicht
-  "nur für Testzwecke". Testumgebungen bekommen eigene, klar gekennzeichnete
-  Test-Konfiguration statt geschwächter Produktionslogik.
+- No custom terminal emulation/interpretation in the daemon, "just to make it
+  simpler".
+- No automatically triggering kernel updates or reboots, not even on idle —
+  only set the `reboot-pending` flag.
+- No falling back to MD5 as the sole integrity check without a comment in the
+  code or commit text.
+- No own relay/tunnel infrastructure in parallel to CloudGate.
+- No silent shortcuts in the three-factor chain for pairing, not even "just
+  for testing". Test environments get their own, clearly marked test
+  configuration instead of weakened production logic.
 
-## Arbeitsweise
+## Way of working
 
-- **Eine Phase nach der anderen** (siehe `ROADMAP.md`), nicht alles parallel anfangen.
-  Jede Phase endet in einem eigenständig lauffähigen/testbaren Zustand.
-- Kleine, beschriebene Commits pro logischem Schritt. Keine Monster-Commits pro Phase.
-- Jede Komponente hat ein eigenes `README.md`: Zweck, lokales Setup, Tests ausführen.
-- Alles, was nur der Mensch tun kann (Cloudflare-API-Token, Domain, FIDO2-Key kaufen,
-  SSH-Zugang zum echten Server, GitHub-Key hinterlegen) kommt in `TODO_FOR_USER.md`
-  statt zu blockieren oder simuliert zu werden.
-- Offene Entscheidungen aus Abschnitt 12 der Architekturdoku: die dort genannte
-  Standardannahme wählen, in `ROADMAP.md` dokumentieren, explizit als revidierbar
-  kennzeichnen. **Nie schweigend entscheiden.**
-- Tests parallel zur Implementierung, nicht danach. Für den Daemon: Unit-Tests für
-  Lock-Logik, Hash-Verifikation, Session-Statusübergänge. Für Sicherheitspfade (Auth,
-  Rate-Limiting) zusätzlich Negativ-Tests (falsches Passwort, abgelaufene Challenge,
-  wiederverwendeter Pairing-Code).
+- **One phase at a time** (see `ROADMAP.md`), not everything started in
+  parallel. Every phase ends in an independently runnable/testable state.
+- Small, described commits per logical step. No monster commits per phase.
+- Every component has its own `README.md`: purpose, local setup, running tests.
+- Everything only the human can do (Cloudflare API token, domain, buying a
+  FIDO2 key, SSH access to the real server, registering the GitHub key) goes
+  into `TODO_FOR_USER.md` instead of blocking or being simulated.
+- Open questions from Section 12 of the architecture doc: pick the default
+  assumption named there, document it in `ROADMAP.md`, explicitly mark it as
+  revisable. **Never decide silently.**
+- Tests alongside implementation, not after. For the daemon: unit tests for
+  lock logic, hash verification, session state transitions. For security
+  paths (auth, rate limiting) additionally negative tests (wrong password,
+  expired challenge, reused pairing code).
 
-## Modell-Hierarchie in diesem Projekt
+## Model hierarchy in this project
 
-Opus orchestriert, analysiert und verifiziert. Sonnet implementiert. Haiku macht Mechanik
-(Umbenennungen, Formatierung). Subagenten sind advisory und liefern Fakten mit `file:line`;
-Opus verifiziert stichprobenartig gegen den echten Repo-Zustand, bevor etwas darauf aufbaut.
+Opus orchestrates, analyzes, and verifies. Sonnet implements. Haiku does
+mechanics (renames, formatting). Subagents are advisory and deliver facts
+with `file:line`; Opus spot-verifies against the real repo state before
+anything builds on it.
 
-## Repo-Struktur
+## Repo structure
 
 ```
-server-provisioning/   Bash/systemd für den Arch-Server
-daemon/                Go-Daemon
+server-provisioning/   Bash/systemd for the Arch server
+daemon/                Go daemon
   cmd/claudecode-remoted/
   internal/{terminal,files,identity,locks,db}/
-app/                   Flutter-Client
-wiki/                  Quelle für das GitHub-Wiki (wird nach remote-agent.wiki gepusht)
-docs/ARCHITECTURE.md   verbindliche Architektur
-.github/workflows/     CI: Lint, Tests, Build
+app/                   Flutter client
+wiki/                  source for the GitHub wiki (pushed to remote-agent.wiki)
+docs/ARCHITECTURE.md   binding architecture
+.github/workflows/     CI: lint, tests, build
 ```
 
-## Sacred Paths (Updater/Installer fassen sie nie an)
+## Sacred paths (updater/installer never touch these)
 
-- `/var/lib/claudecode-remote/` — SQLite-DB des Daemons (`.db`, `-wal`, `-shm`)
-- `/etc/claudecode-remote/.env` — Secrets
-- `/srv/exchange/`, `/srv/backups/` — Nutzdaten
-- `/run/claudecode-locks/terminal-*` — offene Terminal-Locks
+- `/var/lib/claudecode-remote/` — daemon's SQLite DB (`.db`, `-wal`, `-shm`)
+- `/etc/claudecode-remote/.env` — secrets
+- `/srv/exchange/`, `/srv/backups/` — user data
+- `/run/claudecode-locks/terminal-*` — open terminal locks

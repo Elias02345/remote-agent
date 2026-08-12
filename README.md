@@ -1,36 +1,39 @@
 # ClaudeCode Remote
 
-Persistente Terminal-Sessions für Coding-Agents (Claude Code, Codex, Antigravity) auf
-einem eigenen Arch-Linux-Server — erreichbar von Android, Windows, Linux und Web.
-Sessions überleben Verbindungsabbrüche und Gerätewechsel, weil tmux die Persistenz­schicht
-ist und der Daemon rohe Terminal-Bytes unverändert durchreicht.
+Persistent terminal sessions for coding agents (Claude Code, Codex,
+Antigravity) on your own Arch Linux server — reachable from Android, Windows,
+Linux, and Web. Sessions survive connection drops and device switches because
+tmux is the persistence layer and the daemon passes raw terminal bytes
+through unchanged.
 
-> **Status: Phase 0 (Setup) abgeschlossen.** Es läuft noch kein Code — die Phasen 1–9
-> bauen das System schrittweise auf. Siehe [`ROADMAP.md`](ROADMAP.md).
+> **Status: Phase 0 (setup) done.** No code runs yet — Phases 1–9 build the
+> system step by step. See [`ROADMAP.md`](ROADMAP.md).
 
-## Komponenten
+## Components
 
-| Verzeichnis | Inhalt | Technik |
+| Directory | Content | Tech |
 |---|---|---|
-| [`server-provisioning/`](server-provisioning/) | Arch-Server härten, User trennen, Tailscale, systemd-Units, Idle-Updater, Backups, Samba | Bash + systemd |
-| [`daemon/`](daemon/) | Terminal-Session-Daemon, File-API, Geräte-Identität | Go |
-| [`app/`](app/) | Client für Android / Windows / Linux / Web | Flutter + `xterm.dart` |
-| [`wiki/`](wiki/) | Quelle des GitHub-Wikis | Markdown |
+| [`server-provisioning/`](server-provisioning/) | Hardening the Arch server, user separation, Tailscale, systemd units, idle updater, backups, Samba | Bash + systemd |
+| [`daemon/`](daemon/) | Terminal session daemon, file API, device identity | Go |
+| [`app/`](app/) | Client for Android / Windows / Linux / Web | Flutter + `xterm.dart` |
+| [`wiki/`](wiki/) | Source of the GitHub wiki | Markdown |
 
-Der öffentliche HTTPS-Zugang hinter CGNAT läuft über
-[CloudGate](https://github.com/Elias02345/CloudGate) im Tunnel-Modus — dieses Repo baut
-**keine** eigene Relay-Infrastruktur.
+Public HTTPS access behind CGNAT runs through
+[CloudGate](https://github.com/Elias02345/CloudGate) in tunnel mode — this
+repo builds **no** own relay infrastructure.
 
-## Dokumentation
+## Documentation
 
-- **[Wiki](https://github.com/Elias02345/remote-agent/wiki)** — Betriebs- und
-  Verständnis-Doku, Einstiegspunkt für Menschen.
-- **[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)** — verbindliche Architektur­entscheidung.
-  Änderungen nur nach Rücksprache.
-- **[`ROADMAP.md`](ROADMAP.md)** — Phasenstatus und getroffene offene Entscheidungen.
-- **[`TODO_FOR_USER.md`](TODO_FOR_USER.md)** — was nur der Mensch erledigen kann.
-- **[`CLAUDE.md`](CLAUDE.md)** — Konventionen für Agent-Sessions in diesem Repo.
+- **[Wiki](https://github.com/Elias02345/remote-agent/wiki)** — operations
+  and background docs, the entry point for humans.
+- **[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)** — binding architecture
+  decision. Changes only after consultation.
+- **[`docs/ARCHITECTURE.de.md`](docs/ARCHITECTURE.de.md)** — German original.
+- **[`ROADMAP.md`](ROADMAP.md)** — phase status and decisions made on open
+  questions.
+- **[`TODO_FOR_USER.md`](TODO_FOR_USER.md)** — what only the human can do.
+- **[`CLAUDE.md`](CLAUDE.md)** — conventions for agent sessions in this repo.
 
-## Lizenz
+## License
 
-Noch nicht festgelegt.
+Not yet decided.

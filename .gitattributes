@@ -1,0 +1,7 @@
+# Shell-Skripte und Unit-Files landen auf einem Linux-Server — CRLF wuerde sie brechen.
+* text=auto eol=lf
+*.sh text eol=lf
+*.service text eol=lf
+*.timer text eol=lf
+*.png binary
+*.jpg binary

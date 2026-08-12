@@ -1,122 +1,135 @@
 # ROADMAP — ClaudeCode Remote
 
-Status-Werte: `offen` · `in Arbeit` · `fertig`
+Status values: `open` · `in progress` · `done`
 
-Verbindliche Grundlage: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
-Nach jeder Phase: Zusammenfassung, neue Einträge in `TODO_FOR_USER.md`, Rückfrage zu
-den in der Phase getroffenen offenen Entscheidungen — dann erst die nächste Phase.
+Binding basis: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
+After each phase: summary, new entries in `TODO_FOR_USER.md`, a check-in on
+the open decisions made during the phase — only then the next phase.
 
-## Phasenübersicht
+## Phase overview
 
 | # | Phase | Status |
 |---|---|---|
-| 0 | Repo-Setup, Architekturdoku, Wiki | fertig |
-| 1 | Server-Fundament | offen |
-| 2 | Agent-Stack | offen |
-| 3 | Idle-Update-System | offen |
-| 4 | Terminal-Daemon MVP | offen |
-| 5 | Dateien & Backups | offen |
-| 6 | CloudGate-Anbindung | offen |
-| 7 | Sicherheits-Layer | offen |
-| 8 | Client-App Grundgerüst | offen |
-| 9 | Android & Feinschliff | offen |
+| 0 | Repo setup, architecture doc, wiki | done |
+| 1 | Server foundation | open |
+| 2 | Agent stack | open |
+| 3 | Idle update system | open |
+| 4 | Terminal daemon MVP | open |
+| 5 | Files & backups | open |
+| 6 | CloudGate connection | open |
+| 7 | Security layer | open |
+| 8 | Client app skeleton | open |
+| 9 | Android & polish | open |
 
 ---
 
-## Phase 1 — Server-Fundament · `offen`
+## Phase 1 — Server foundation · `open`
 
-**Umfang:** `server-provisioning/` — SSH-Härtung (Keys only, Port 2222, fail2ban),
-User-Trennung `admin`/`agent`, Tailscale-Setup-Skript, GitHub-Key-Einrichtung dokumentiert.
+**Scope:** `server-provisioning/` — SSH hardening (keys only, port 2222,
+fail2ban), user separation `admin`/`agent`, Tailscale setup script, GitHub
+key setup documented. No target server exists yet (confirmed by the owner),
+so Phase 1 additionally ships a container-based test harness (Arch
+container) so the provisioning scripts are provably runnable and idempotent
+rather than merely written.
 
-**Definition of Done:** Ein frischer Arch-Server lässt sich mit einem Skript in den in
-`docs/ARCHITECTURE.md` Abschnitt 2 beschriebenen Zustand bringen, inklusive Idempotenz
-(mehrfaches Ausführen bricht nichts).
+**Definition of Done:** A fresh Arch server can be brought into the state
+described in `docs/ARCHITECTURE.md` Section 2 with a single script, including
+idempotency (running it multiple times breaks nothing). The container-based
+test harness runs the provisioning scripts against a fresh Arch container
+twice and passes both times, proving idempotency without real hardware.
 
-## Phase 2 — Agent-Stack · `offen`
+## Phase 2 — Agent stack · `open`
 
-**Umfang:** Installationsskripte für Claude Code / Codex / Antigravity-CLI,
-`agentctl init` inkl. Git-Hooks, Verteilung der globalen `~/.claude/CLAUDE.md`.
+**Scope:** Installation scripts for Claude Code / Codex / Antigravity CLI,
+`agentctl init` including Git hooks, distribution of the global
+`~/.claude/CLAUDE.md`.
 
-**Definition of Done:** In einem Test-Repo erzeugt `agentctl init` korrekt die drei
-Symlinks; Git-Hooks lösen es bei Checkout/Merge automatisch aus.
+**Definition of Done:** In a test repo, `agentctl init` correctly creates the
+three symlinks; Git hooks trigger it automatically on checkout/merge.
 
-## Phase 3 — Idle-Update-System · `offen`
+## Phase 3 — Idle update system · `open`
 
-**Umfang:** `agent-run`-Wrapper, Lock-Verzeichnis-Logik (beide Lock-Typen getrennt
-getestet), systemd-Timer, ntfy-Anbindung.
+**Scope:** `agent-run` wrapper, lock-directory logic (both lock types tested
+separately), systemd timer, ntfy integration.
 
-**Definition of Done:** Tests beweisen, dass Updates bei vorhandenem Lock übersprungen
-werden, dass Agent-Locks nach 6 h Stale-Cleanup verschwinden und Terminal-Locks nicht.
+**Definition of Done:** Tests prove that updates are skipped while a lock
+exists, that agent locks disappear after 6 h of stale cleanup, and that
+terminal locks do not.
 
-## Phase 4 — Terminal-Daemon MVP · `offen`
+## Phase 4 — Terminal daemon MVP · `open`
 
-**Umfang:** Go-Service, REST+WebSocket-API aus Abschnitt 5.2, SQLite-Schema aus 5.3,
-getestet gegen einen simplen `xterm.js`-Testclient (kein Flutter nötig).
+**Scope:** Go service, REST+WebSocket API from Section 5.2, SQLite schema
+from 5.3, tested against a simple `xterm.js` test client (no Flutter needed).
 
-**Definition of Done:** Ein vollbildschirmfähiges TUI (Claude Code selbst, testweise auch
-`htop`/`vim`) läuft sichtbar korrekt im Testclient, inklusive Alternate-Screen-Umschaltung
-und Resize.
+**Definition of Done:** A full-screen-capable TUI (Claude Code itself, also
+`htop`/`vim` as a test) runs visibly correctly in the test client, including
+alternate-screen switching and resize.
 
-## Phase 5 — Dateien & Backups · `offen`
+## Phase 5 — Files & backups · `open`
 
-**Umfang:** Samba-Konfiguration (`backups`/`exchange`, Tailscale-only), restic-Timer,
-File-API-Endpunkte inkl. SHA-256-Doppelprüfung und tus-basiertem Resumable Upload.
+**Scope:** Samba configuration (`backups`/`exchange`, Tailscale-only),
+restic timer, file API endpoints including SHA-256 double-checking and
+`tus`-based resumable upload.
 
-**Definition of Done:** Ein absichtlich abgebrochener Upload lässt sich fortsetzen, ein
-manipulierter Chunk wird zurückgewiesen, ein Restore-Test-Timer läuft nachweislich durch.
+**Definition of Done:** A deliberately aborted upload can be resumed, a
+tampered chunk is rejected, a restore test timer demonstrably runs through.
 
-## Phase 6 — CloudGate-Anbindung · `offen`
+## Phase 6 — CloudGate connection · `open`
 
-**Umfang:** Dokumentation/Skript für die Host-Einrichtung in CloudGate (Tunnel-Modus),
-feste Subdomain-Entscheidung eintragen, Owner-Login-Portal-Grundgerüst gemäß Entscheidung
-D-05.
+**Scope:** Documentation/script for host setup in CloudGate (tunnel mode),
+record the final subdomain decision, owner login portal skeleton per
+decision D-05.
 
-**Definition of Done:** Der Terminal-Daemon ist über die feste Subdomain per HTTPS
-erreichbar, WebSocket-Verbindung funktioniert nachweislich durch den Tunnel.
+**Definition of Done:** The terminal daemon is reachable via the fixed
+subdomain over HTTPS; the WebSocket connection demonstrably works through
+the tunnel.
 
-**Blocker:** D-04 (Domain) muss vorher final sein — siehe `TODO_FOR_USER.md`.
+**Blocker:** D-04 (domain) must be final before this — see `TODO_FOR_USER.md`.
 
-## Phase 7 — Sicherheits-Layer · `offen`
+## Phase 7 — Security layer · `open`
 
-**Umfang:** Passwort (Argon2id) + TOTP + Passkey-Pairing-Flow, Ed25519-Geräte­auth,
-Step-Up-Auth für sensible Aktionen, Rate-Limiting.
+**Scope:** Password (`Argon2id`) + TOTP + passkey pairing flow, `Ed25519`
+device auth, step-up auth for sensitive actions, rate limiting.
 
-**Definition of Done:** Ein neues Gerät kann nur nach erfolgreichem Abschluss aller drei
-Faktoren gepairt werden; ein bereits gepairtes Gerät kommt ohne erneute Passwort-Eingabe
-rein; sensible Aktionen lösen nachweislich einen Step-Up-Prompt aus.
+**Definition of Done:** A new device can only be paired after successfully
+completing all three factors; an already-paired device gets in without
+re-entering the password; sensitive actions demonstrably trigger a step-up
+prompt.
 
-## Phase 8 — Client-App Grundgerüst · `offen`
+## Phase 8 — Client app skeleton · `open`
 
-**Umfang:** Flutter-Projekt für Linux/Windows/Web zuerst, Session-Liste, Terminal-View mit
-`xterm.dart`, Reconnect-Logik, Datei-Browser.
+**Scope:** Flutter project for Linux/Windows/Web first, session list,
+terminal view with `xterm.dart`, reconnect logic, file browser.
 
-**Definition of Done:** Alle drei Desktop-/Web-Targets bauen aus derselben Codebasis; eine
-Terminal-Session lässt sich öffnen, trennen und auf einem anderen simulierten Client
-fortsetzen.
+**Definition of Done:** All three desktop/web targets build from the same
+codebase; a terminal session can be opened, disconnected, and resumed on
+another simulated client.
 
-## Phase 9 — Android & Feinschliff · `offen`
+## Phase 9 — Android & polish · `open`
 
-**Umfang:** Mobile Steuerleiste, native Copy-Paste-UX, Share-Sheet-Integration für
-Datei-Uploads, FIDO2-Hardware-Key-Support als Linux-Fallback, Benachrichtigungen.
+**Scope:** Mobile control bar, native copy-paste UX, share-sheet integration
+for file uploads, FIDO2 hardware key support as a Linux fallback,
+notifications.
 
-**Definition of Done:** Eine Datei aus einer beliebigen Android-App heraus lässt sich per
-Share-Sheet direkt in `to-agent/` einer laufenden Session hochladen.
+**Definition of Done:** A file from any Android app can be uploaded directly
+into `to-agent/` of a running session via the share sheet.
 
 ---
 
-## Getroffene offene Entscheidungen
+## Decisions made on open questions
 
-Alle Einträge folgen der in `docs/ARCHITECTURE.md` Abschnitt 12 genannten
-Standardannahme. **Alle sind revidierbar**, solange die jeweils betroffene Phase noch
-nicht abgeschlossen ist — Ausnahme D-04, siehe dort.
+All entries follow the default assumption named in `docs/ARCHITECTURE.md`
+Section 12. **All are revisable** as long as the affected phase isn't
+finished yet — exceptions: D-04 and D-05, see there.
 
-| ID | Frage | Gewählt | Betrifft | Revidierbar bis |
+| ID | Question | Chosen | Affects | Revisable until |
 |---|---|---|---|---|
-| D-01 | Mesh: Tailscale vs. eigenes WireGuard | **Tailscale** (Doc-Empfehlung, NAT-Traversal + ACLs ohne Eigenbau) | Phase 1 | Ende Phase 1 |
-| D-02 | Bare-Metal vs. Proxmox-VM | **Provisioning bleibt agnostisch** — die Skripte laufen auf beidem, Snapshots sind ein reiner Betriebsvorteil | Phase 1 | jederzeit |
-| D-03 | `reboot-pending`: informativ vs. automatisches Zeitfenster | **Rein informativ** (ntfy-Push, manueller Reboot). Kein Auto-Reboot-Timer in Phase 3 | Phase 3 | jederzeit, additiv nachrüstbar |
-| D-04 | WebAuthn-Relying-Party-Domain | **offen — muss der Nutzer festlegen** | Phase 6/7 | **nur vor dem Passkey-Rollout.** Späterer Wechsel invalidiert alle Passkeys |
-| D-05 | Owner-Login: WebAuthn-Modul in CloudGate vs. separates Portal | **Separates Portal** als `/owner`-Route im Daemon (Abschnitt 10.2). Saubere Trennung, CloudGate bleibt unverändert | Phase 6/7 | Ende Phase 6 |
-| D-06 | CloudGate-Selbst-Update mit Lock koppeln | **Nein.** Das kurze `cloudflared`-Reload-Fenster wird akzeptiert; als Feature-Idee im CloudGate-Repo notiert, kein Blocker hier | — | jederzeit |
-| D-07 | Volle Drei-Faktor-Kette bei jedem Pairing | **Ja, ausnahmslos.** Keine reduzierte Stufe für "vertraute Netze" | Phase 7 | Ende Phase 7 |
-| D-08 | MD5 vs. SHA-256 für Datei-Hashes | **SHA-256** — bereits im Prompt als nicht verhandelbar fixiert | Phase 5 | — |
+| D-01 | Mesh: Tailscale vs. own WireGuard | **Tailscale** (doc recommendation, NAT traversal + ACLs without building it ourselves) | Phase 1 | End of Phase 1 |
+| D-02 | Bare metal vs. Proxmox VM | **Provisioning stays agnostic** — the scripts run on both, snapshots are a pure operational benefit | Phase 1 | any time |
+| D-03 | `reboot-pending`: informational vs. automatic time window | **Purely informational** (ntfy push, manual reboot). No auto-reboot timer in Phase 3 | Phase 3 | any time, additively upgradable later |
+| D-04 | WebAuthn relying-party domain | **open — owner must decide.** Confirmed by the owner in Phase 0 that this stays deferred; Phases 1–5 are built domain-agnostic; the question is re-raised before Phase 6. | Phase 6/7 | **only before the passkey rollout.** A later change invalidates all passkeys |
+| D-05 | Owner login: WebAuthn module in CloudGate vs. separate portal | **Separate portal** as a `/owner` route in the daemon (Section 10.2). Clean separation, CloudGate stays unchanged. **Confirmed by the owner in Phase 0** — no longer a default assumption. | Phase 6/7 | confirmed — reopen only on explicit request |
+| D-06 | Couple CloudGate self-update to the lock | **No.** The short `cloudflared` reload window is accepted; noted as a feature idea in the CloudGate repo, not a blocker here | — | any time |
+| D-07 | Full three-factor chain on every pairing | **Yes, without exception.** No reduced tier for "trusted networks" | Phase 7 | End of Phase 7 |
+| D-08 | MD5 vs. SHA-256 for file hashes | **SHA-256** — already fixed as non-negotiable in the prompt | Phase 5 | — |
+| D-09 | Documentation language | **English throughout** (wiki, READMEs, script output, commit messages), because the repo is public. The German original of the architecture doc is preserved as `docs/ARCHITECTURE.de.md`. | all phases | any time, but costly |
