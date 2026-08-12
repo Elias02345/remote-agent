@@ -10,7 +10,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Install shellcheck
         run: |
@@ -33,7 +33,10 @@ jobs:
           status=0
           while IFS= read -r -d '' f; do
             echo "shellcheck: ${f}"
-            shellcheck "$f" || status=1
+            # -x follows sourced files. Without it, provision.sh sourcing
+            # lib/common.sh is reported as SC1091 and the build fails on a
+            # finding that says nothing about the code.
+            shellcheck -x "$f" || status=1
           done < <(find . -path ./.git -prune -o -name '*.sh' -print0)
           exit "$status"
 
@@ -50,7 +53,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Run provisioning test harness
         run: server-provisioning/test/run-tests.sh
