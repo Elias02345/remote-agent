@@ -11,7 +11,7 @@ the open decisions made during the phase — only then the next phase.
 | # | Phase | Status |
 |---|---|---|
 | 0 | Repo setup, architecture doc, wiki | done |
-| 1 | Server foundation | open |
+| 1 | Server foundation | done |
 | 2 | Agent stack | open |
 | 3 | Idle update system | open |
 | 4 | Terminal daemon MVP | open |
@@ -23,7 +23,16 @@ the open decisions made during the phase — only then the next phase.
 
 ---
 
-## Phase 1 — Server foundation · `open`
+## Phase 1 — Server foundation · `done`
+
+**Verified:** the container harness runs `provision.sh` twice inside one Arch
+container and passes 30 of 30 assertions in CI, including `sshd -t` against the
+hardened config and exactly one active `Port` / `AllowUsers` /
+`PasswordAuthentication` line after both runs. `shellcheck -x` and `bash -n` are
+clean across the repo. **Not** covered, because no real machine exists yet: an
+actual sshd restart under systemd, fail2ban banning a real client, and Tailscale
+bringing up an interface.
+
 
 **Scope:** `server-provisioning/` — SSH hardening (keys only, port 2222,
 fail2ban), user separation `admin`/`agent`, Tailscale setup script, GitHub
@@ -132,6 +141,7 @@ finished yet — exceptions: D-04 and D-05, see there.
 | D-06 | Couple CloudGate self-update to the lock | **No.** The short `cloudflared` reload window is accepted; noted as a feature idea in the CloudGate repo, not a blocker here | — | any time |
 | D-07 | Full three-factor chain on every pairing | **Yes, without exception.** No reduced tier for "trusted networks" | Phase 7 | End of Phase 7 |
 | D-08 | MD5 vs. SHA-256 for file hashes | **SHA-256** — already fixed as non-negotiable in the prompt | Phase 5 | — |
+| D-10 | `admin` sudo: password-gated vs. `NOPASSWD` | **Password-gated** via its own `/etc/sudoers.d/admin` drop-in. Not in Section 12 — it surfaced in Phase 1, because `PermitRootLogin no` plus no sudo path for `admin` left the machine administrable only from the physical console. `NOPASSWD` was rejected: SSH is key-only, so a stolen admin key would otherwise be instant root. Cost: the operator must supply `CCR_ADMIN_PASSWORD_HASH` or run `passwd admin` before closing the root session; `provision.sh` warns loudly when neither happened. | Phase 1 | any time, but flipping to `NOPASSWD` weakens the model — reopen only deliberately |
 | D-09 | Documentation language | **English throughout** (wiki, READMEs, script output, commit messages), because the repo is public. The German original of the architecture doc is preserved as `docs/ARCHITECTURE.de.md`. | all phases | any time, but costly |
 
 ---
