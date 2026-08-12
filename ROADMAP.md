@@ -12,7 +12,7 @@ the open decisions made during the phase — only then the next phase.
 |---|---|---|
 | 0 | Repo setup, architecture doc, wiki | done |
 | 1 | Server foundation | done |
-| 2 | Agent stack | open |
+| 2 | Agent stack | in progress |
 | 3 | Idle update system | open |
 | 4 | Terminal daemon MVP | open |
 | 5 | Files & backups | open |
@@ -47,7 +47,7 @@ idempotency (running it multiple times breaks nothing). The container-based
 test harness runs the provisioning scripts against a fresh Arch container
 twice and passes both times, proving idempotency without real hardware.
 
-## Phase 2 — Agent stack · `open`
+## Phase 2 — Agent stack · `in progress`
 
 **Scope:** Installation scripts for Claude Code / Codex / Antigravity CLI,
 `agentctl init` including Git hooks, distribution of the global

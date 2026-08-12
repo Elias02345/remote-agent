@@ -13,7 +13,7 @@ git clone --depth 1 "$REPO" "$CLONE"
 find "$CLONE" -maxdepth 1 -name '*.md' -delete
 cp "$SRC"/*.md "$CLONE/"
 git -C "$CLONE" add -A
-git -C "$CLONE" diff --cached --quiet && { echo "Wiki bereits aktuell."; exit 0; }
-git -C "$CLONE" commit -m "Wiki aus wiki/ aktualisiert"
+git -C "$CLONE" diff --cached --quiet && { echo "Wiki already up to date."; exit 0; }
+git -C "$CLONE" commit -m "Update wiki from wiki/"
 git -C "$CLONE" push
-echo "Wiki publiziert."
+echo "Wiki published."
