@@ -15,9 +15,23 @@ import (
 	"time"
 
 	"github.com/Elias02345/remote-agent/daemon/internal/db"
+	"github.com/Elias02345/remote-agent/daemon/internal/files"
 	"github.com/Elias02345/remote-agent/daemon/internal/locks"
 	"github.com/Elias02345/remote-agent/daemon/internal/terminal"
 )
+
+// splitRoots parses the --file-roots list, dropping empty entries so a
+// trailing comma cannot turn into a root of "" (which would resolve to the
+// working directory and quietly widen the allowlist).
+func splitRoots(s string) []string {
+	out := []string{}
+	for _, part := range strings.Split(s, ",") {
+		if p := strings.TrimSpace(part); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
+}
 
 //go:embed web
 var webFS embed.FS
@@ -27,6 +41,10 @@ func main() {
 		addr    = flag.String("addr", "127.0.0.1:8080", "listen address")
 		dbPath  = flag.String("db", "/var/lib/claudecode-remote/daemon.db", "path to the SQLite database")
 		lockDir = flag.String("lock-dir", locks.DefaultDir, "terminal lock directory")
+		roots   = flag.String("file-roots", "/srv/exchange",
+			"comma-separated allowlist of directories the file API may serve")
+		uploadDir = flag.String("upload-dir", "/var/lib/claudecode-remote/uploads",
+			"where partial resumable uploads are kept")
 	)
 	flag.Parse()
 
@@ -56,6 +74,19 @@ func main() {
 	mgr := terminal.NewManager(database, lockMgr, terminal.NewTmux())
 
 	mux := mgr.Routes()
+
+	// The file API serves only the allowlisted roots — there is deliberately
+	// no browser over the whole filesystem (Section 8.1).
+	store, err := files.NewStore(splitRoots(*roots))
+	if err != nil {
+		log.Fatalf("file roots: %v", err)
+	}
+	uploader, err := files.NewUploader(store, *uploadDir)
+	if err != nil {
+		log.Fatalf("upload directory: %v", err)
+	}
+	(&files.API{Store: store, Uploader: uploader}).Register(mux)
+
 	mux.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"status":"ok"}`))

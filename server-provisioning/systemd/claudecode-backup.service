@@ -1,0 +1,8 @@
+[Unit]
+Description=ClaudeCode Remote restic backup
+Documentation=https://github.com/Elias02345/remote-agent/wiki/Files-and-Backups
+
+[Service]
+Type=oneshot
+EnvironmentFile=-/etc/claudecode-remote/.env
+ExecStart=/usr/local/bin/claudecode-backup.sh

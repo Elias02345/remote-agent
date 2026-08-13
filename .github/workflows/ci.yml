@@ -85,6 +85,17 @@ jobs:
       - name: Run idle update harness
         run: bash server-provisioning/test/run-idle-update-tests.sh
 
+  backup-harness:
+    name: Backup and Samba container harness
+    needs: shellcheck
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Run backup harness
+        run: bash server-provisioning/test/run-backup-tests.sh
+
   daemon:
     name: Daemon build and tests
     runs-on: ubuntu-latest
