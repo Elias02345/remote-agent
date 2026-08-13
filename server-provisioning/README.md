@@ -110,6 +110,83 @@ Each assertion prints `[PASS]`/`[FAIL]`; the script exits non-zero if
 anything failed. This harness also runs in CI (`.github/workflows/ci.yml`)
 on every push and pull request, gated behind the shellcheck job.
 
+## The agent stack (Phase 2)
+
+`install-agent-stack.sh` installs the coding agents for the `agent` user and
+puts `agentctl` on the PATH. Run it **after** `provision.sh`, since it expects
+the `agent` user to exist:
+
+```bash
+sudo bash install-agent-stack.sh
+```
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `CCR_AGENT_USER` | `agent` | user the stack is installed for |
+| `CCR_AGENT_PACKAGES` | `@anthropic-ai/claude-code @openai/codex` | npm packages to install globally |
+
+A package that fails to install produces a warning and a `FAIL` line in the
+summary, never an aborted run — vendor package names change, and one bad name
+must not block the other tools.
+
+**The Antigravity CLI is deliberately not in the default list.** Its npm
+package name could not be verified, and a guessed name would fail on every run.
+Add it to `CCR_AGENT_PACKAGES` once you know the correct install command.
+
+The script also places `templates/global-CLAUDE.md` at
+`~agent/.claude/CLAUDE.md` — but **only if that file does not already exist**,
+because it is your machine-wide conventions file and a re-run must not discard
+your edits. `~/.codex/AGENTS.md` and `~/.antigravity/ANTIGRAVITY.md` become
+symlinks to it, which is what makes one file the source of truth for all three
+agents.
+
+### agentctl
+
+Per project, `CLAUDE.md` is the single editable file and the other two are
+symlinks to it (architecture Section 3.2 — symlinks, not bind mounts, because
+every tool reads a text file transparently and a bind mount would break under
+containers and chroots):
+
+```
+CLAUDE.md            canonical source, the one you edit
+AGENTS.md -> CLAUDE.md
+ANTIGRAVITY.md -> CLAUDE.md
+```
+
+| Command | Effect |
+|---|---|
+| `agentctl init [dir]` | requires `CLAUDE.md`, creates both symlinks, installs the Git hooks |
+| `agentctl install-hooks [dir]` | hooks only; outside a Git work tree it warns and exits 0 |
+| `agentctl --help` | usage |
+
+Two rules worth knowing:
+
+- **The links are relative.** An absolute link would break the moment the repo
+  is moved or cloned to a different path.
+- **A regular file is never replaced.** If `AGENTS.md` exists as a real file,
+  `agentctl` refuses, leaves it untouched, and exits non-zero. Silently
+  overwriting it would destroy someone's work.
+
+The `post-checkout` and `post-merge` hooks re-run `agentctl init`, so the links
+survive branch switches and merges. `.git/hooks` is **per clone and never
+committed**, so `agentctl init` has to be run once in every fresh checkout —
+that is a Git limitation, not an oversight. Hooks written by `agentctl` carry a
+`# managed-by: agentctl` marker; a hook without it is yours and is left alone
+with a warning.
+
+Run the agentctl tests with:
+
+```bash
+cd server-provisioning/test
+./run-agentctl-tests.sh
+```
+
+It builds the same Arch container and proves, among other things, that the
+links are relative, that a pre-existing regular `AGENTS.md` survives byte for
+byte, and — the Phase 2 Definition of Done — that a real `git checkout` and a
+real `git merge` actually restore a deleted symlink through the hooks. This
+harness runs in CI alongside the provisioning one.
+
 ## What the test harness cannot cover
 
 The container has no systemd as init by design (see `test/Containerfile`),

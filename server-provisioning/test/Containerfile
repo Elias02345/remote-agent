@@ -11,9 +11,10 @@
 # - provision.sh installs its own runtime packages (openssh, sudo, fail2ban,
 #   ...) via pacman, so this image only needs to be able to run bash and let
 #   pacman itself work -- it does not pre-install the packages under test.
-#   The one exception is `openssl`: run-tests.sh uses `openssl passwd -6`
-#   to generate a throwaway crypt hash for the CCR_ADMIN_PASSWORD_HASH
-#   positive test, which is test-harness tooling, not part of provision.sh.
+#   The exceptions are harness tooling, not things under test: `openssl`, for
+#   the `openssl passwd -6` crypt hash in the CCR_ADMIN_PASSWORD_HASH positive
+#   test, and `git`, because run-agentctl-tests.sh builds real repositories and
+#   performs real checkouts and merges to prove the Git hooks actually fire.
 FROM archlinux:base
 
 # ponytail: disable pacman signature checking for this image only. This is a
@@ -22,6 +23,6 @@ FROM archlinux:base
 # practical risk here than a tampered mirror. provision.sh itself never
 # touches pacman.conf, so this has no effect on real-server behavior.
 RUN sed -i 's/^#\?SigLevel.*/SigLevel = Never/' /etc/pacman.conf \
-    && pacman -Sy --noconfirm --needed openssl
+    && pacman -Sy --noconfirm --needed openssl git
 
 WORKDIR /repo

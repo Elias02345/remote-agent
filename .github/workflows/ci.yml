@@ -24,7 +24,7 @@ jobs:
           while IFS= read -r -d '' f; do
             echo "syntax check: ${f}"
             bash -n "$f" || status=1
-          done < <(find . -path ./.git -prune -o -name '*.sh' -print0)
+          done < <(find . -path ./.git -prune -o \( -name '*.sh' -o -name 'agentctl' \) -print0)
           exit "$status"
 
       - name: shellcheck
@@ -37,7 +37,7 @@ jobs:
             # lib/common.sh is reported as SC1091 and the build fails on a
             # finding that says nothing about the code.
             shellcheck -x "$f" || status=1
-          done < <(find . -path ./.git -prune -o -name '*.sh' -print0)
+          done < <(find . -path ./.git -prune -o \( -name '*.sh' -o -name 'agentctl' \) -print0)
           exit "$status"
 
   # ponytail: this job now runs for real. It was originally left out with a
@@ -55,9 +55,22 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v5
 
-      - name: Run provisioning test harness
+      - name: Run provisioning harness
         # Invoked through bash on purpose. The exec bit is set in the index,
         # but this repo is authored on Windows where it is easy to lose on a
         # newly added script, and this job should fail on harness logic, not
         # on a file mode.
         run: bash server-provisioning/test/run-tests.sh
+
+  # Independent of the provisioning harness -- agentctl is tested on its own,
+  # so these two jobs run in parallel behind the same lint gate.
+  agentctl-harness:
+    name: agentctl container harness
+    needs: shellcheck
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Run agentctl harness
+        run: bash server-provisioning/test/run-agentctl-tests.sh

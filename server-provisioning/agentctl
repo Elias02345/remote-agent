@@ -1,0 +1,227 @@
+#!/usr/bin/env bash
+# agentctl — per-project agent context management (docs/ARCHITECTURE.md §3.2).
+#
+# Installed to /usr/local/bin/agentctl by install-agent-stack.sh, so it must
+# work standalone: it does NOT source lib/common.sh (that file lives in the
+# server-provisioning repo, not next to the installed binary) and carries its
+# own tiny copy of the same output helpers instead.
+#
+# Run by the operator/agent user, not by root — it only ever touches files
+# inside the target project directory and .git/hooks under it.
+
+set -Eeuo pipefail
+
+# --- output helpers (kept byte-compatible with lib/common.sh) --------------
+
+if [[ -t 1 ]]; then
+  C_CYAN=$'\033[36m'; C_GREEN=$'\033[32m'; C_YELLOW=$'\033[33m'
+  C_RED=$'\033[31m'; C_BOLD=$'\033[1m'; C_RESET=$'\033[0m'
+else
+  C_CYAN=''; C_GREEN=''; C_YELLOW=''; C_RED=''; C_BOLD=''; C_RESET=''
+fi
+
+log()    { echo "${C_CYAN}[INFO]${C_RESET} $*"; }
+ok()     { echo "${C_GREEN}[OK]${C_RESET} $*"; }
+warn()   { echo "${C_YELLOW}[WARN]${C_RESET} $*" >&2; }
+err()    { echo "${C_RED}[ERROR]${C_RESET} $*" >&2; }
+fail()   { echo "${C_RED}[FATAL]${C_RESET} $*" >&2; exit 1; }
+banner() { echo "${C_BOLD}${C_CYAN}━━━ $* ━━━${C_RESET}"; }
+
+# --- constants ---------------------------------------------------------------
+
+HOOK_MARKER="# managed-by: agentctl"
+
+# --- usage -------------------------------------------------------------------
+
+usage() {
+  cat <<'EOF'
+Usage: agentctl <command> [dir]
+
+Commands:
+  init [dir]            Verify CLAUDE.md exists in dir (default: .), create
+                         the AGENTS.md and ANTIGRAVITY.md symlinks pointing
+                         at it, then install the Git hooks that redo this
+                         automatically on checkout/merge.
+  install-hooks [dir]   Install the post-checkout/post-merge Git hooks only.
+  --help                Show this help.
+EOF
+}
+
+# --- symlink management -------------------------------------------------------
+
+# link_to_claude_md <dir> <name> — points <dir>/<name> at CLAUDE.md as a
+# RELATIVE symlink (never absolute: an absolute link breaks the moment the
+# repo is moved or freshly cloned elsewhere).
+#
+# Never replaces a regular file — if <name> already exists and is not a
+# symlink, it's someone's real content and clobbering it would destroy work.
+# Returns 1 in that case so the caller can make the overall command exit
+# non-zero, without aborting the rest of the run.
+link_to_claude_md() {
+  local dir="$1" name="$2"
+  local target="CLAUDE.md"
+  local path="${dir}/${name}"
+
+  if [[ -L "$path" ]]; then
+    local current
+    current="$(readlink "$path")"
+    if [[ "$current" == "$target" ]]; then
+      ok "${name} already correctly linked to ${target}"
+      return 0
+    fi
+    (cd "$dir" && ln -sfn "$target" "$name")
+    ok "${name} repointed to ${target} (was: ${current})"
+    return 0
+  fi
+
+  if [[ -e "$path" ]]; then
+    warn "${name} exists and is a regular file, not a symlink — refusing to overwrite it."
+    warn "  Remove or rename ${path} yourself if you want agentctl to manage it."
+    return 1
+  fi
+
+  (cd "$dir" && ln -s "$target" "$name")
+  ok "${name} linked to ${target}"
+}
+
+# --- Git hooks -----------------------------------------------------------------
+
+# hook_should_install <path> — 0 (may write) when the hook doesn't exist yet,
+# or already carries our marker from a previous agentctl run. 1 (must not
+# write) when it's the operator's own unmanaged hook.
+hook_should_install() {
+  local path="$1"
+  [[ -f "$path" ]] || return 0
+  grep -qF "$HOOK_MARKER" "$path"
+}
+
+warn_foreign_hook() {
+  local name="$1"
+  warn "${name} exists and is not managed by agentctl — leaving it alone."
+  warn "  Add this line to it yourself to get the same behavior:"
+  # shellcheck disable=SC2016 # intentionally literal — this is printed as
+  # text for the operator to paste, not expanded here.
+  warn '    command -v agentctl >/dev/null 2>&1 && agentctl init "$(git rev-parse --show-toplevel)"'
+}
+
+# install_post_checkout <path> — writes the post-checkout hook, or skips it
+# with a warning if it's a foreign (unmarked) hook.
+#
+# post-checkout receives three arguments: <prev-HEAD> <new-HEAD> <flag>,
+# and also fires on plain file checkouts (`git checkout -- <file>`); flag is
+# "1" only for an actual branch switch, "0" for a file checkout — see
+# https://git-scm.com/docs/githooks#_post_checkout. We only want to act on
+# the former, so the hook body checks $3.
+install_post_checkout() {
+  local path="$1"
+  if ! hook_should_install "$path"; then
+    warn_foreign_hook "post-checkout"
+    return 0
+  fi
+  cat > "$path" <<EOF
+#!/usr/bin/env bash
+$HOOK_MARKER
+# Re-links AGENTS.md/ANTIGRAVITY.md to CLAUDE.md after a branch checkout.
+# Also fires on file checkouts; only act on an actual branch switch (flag=1).
+# https://git-scm.com/docs/githooks#_post_checkout
+command -v agentctl >/dev/null 2>&1 || exit 0
+[ "\$3" = "1" ] || exit 0
+repo_root="\$(git rev-parse --show-toplevel 2>/dev/null)" || exit 0
+agentctl init "\$repo_root"
+EOF
+  chmod 0755 "$path"
+  ok "post-checkout hook installed"
+}
+
+# install_post_merge <path> — same idea for post-merge, which receives a
+# single argument (squash flag) that we don't need to inspect: every merge
+# should re-link. https://git-scm.com/docs/githooks#_post_merge
+install_post_merge() {
+  local path="$1"
+  if ! hook_should_install "$path"; then
+    warn_foreign_hook "post-merge"
+    return 0
+  fi
+  cat > "$path" <<EOF
+#!/usr/bin/env bash
+$HOOK_MARKER
+# Re-links AGENTS.md/ANTIGRAVITY.md to CLAUDE.md after a merge/pull.
+# https://git-scm.com/docs/githooks#_post_merge
+command -v agentctl >/dev/null 2>&1 || exit 0
+repo_root="\$(git rev-parse --show-toplevel 2>/dev/null)" || exit 0
+agentctl init "\$repo_root"
+EOF
+  chmod 0755 "$path"
+  ok "post-merge hook installed"
+}
+
+# --- commands ------------------------------------------------------------------
+
+cmd_install_hooks() {
+  local dir="${1:-.}"
+
+  if ! git -C "$dir" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    warn "${dir} is not inside a Git work tree — skipping hook install."
+    return 0
+  fi
+
+  local git_dir hooks_dir
+  git_dir="$(cd "$dir" && git rev-parse --git-dir)"
+  case "$git_dir" in
+    /*) hooks_dir="${git_dir}/hooks" ;;
+    *)  hooks_dir="${dir}/${git_dir}/hooks" ;;
+  esac
+
+  mkdir -p "$hooks_dir"
+  install_post_checkout "${hooks_dir}/post-checkout"
+  install_post_merge "${hooks_dir}/post-merge"
+  return 0
+}
+
+cmd_init() {
+  local dir="${1:-.}"
+  local claude_md="${dir}/CLAUDE.md"
+
+  [[ -d "$dir" ]] || fail "Not a directory: ${dir}"
+  [[ -f "$claude_md" ]] || fail "CLAUDE.md missing in ${dir} — nothing to link, nothing touched."
+
+  banner "agentctl init: ${dir}"
+
+  local rc=0
+  link_to_claude_md "$dir" "AGENTS.md" || rc=1
+  link_to_claude_md "$dir" "ANTIGRAVITY.md" || rc=1
+
+  cmd_install_hooks "$dir"
+
+  return "$rc"
+}
+
+# --- entry point ---------------------------------------------------------------
+
+main() {
+  local cmd="${1:-}"
+
+  case "$cmd" in
+    "")
+      usage
+      exit 1
+      ;;
+    --help)
+      usage
+      exit 0
+      ;;
+    init)
+      cmd_init "${2:-.}"
+      ;;
+    install-hooks)
+      cmd_install_hooks "${2:-.}"
+      ;;
+    *)
+      err "Unknown subcommand: ${cmd}"
+      usage
+      exit 1
+      ;;
+  esac
+}
+
+main "$@"
