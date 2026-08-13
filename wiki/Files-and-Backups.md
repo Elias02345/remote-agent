@@ -1,9 +1,10 @@
 # Files and Backups
 
-> **Status:** not implemented yet — planned for Phase 5. `daemon/` is
-> currently an empty directory; no Samba share, backup timer, or file-API
-> endpoint exists yet. This page describes the intended design, not a
-> working system.
+> **Status:** implemented (Phase 5). The file API, the Samba configuration and the
+> restic timers ship. 20 CI assertions include `testparm` validating the generated
+> `smb.conf` and a real backup-and-restore cycle comparing restored bytes against
+> the source. The upload path is covered by resume, offset-conflict and
+> tampered-content tests.
 
 This page covers three related things: the two file shares the server will
 expose, the automated backup system, and the file API the daemon will offer

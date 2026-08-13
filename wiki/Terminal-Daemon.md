@@ -1,9 +1,10 @@
 # Terminal Daemon
 
-> **Status:** not implemented yet — planned for Phase 4 (daemon core) and
-> Phase 8 (client skeleton). `daemon/` and `app/` are currently empty
-> directories; no binary exists and no endpoint responds. This page describes
-> the intended design, not a working system.
+> **Status:** implemented (Phase 4), with one part outstanding. The protocol,
+> session lifecycle and lock handling are covered by the Go suite under `-race`.
+> What no test can assert is that a full-screen TUI actually *renders* — colours,
+> box drawing, alternate-screen switching, reflow on resize. That needs a human at
+> a browser; the checklist is in `TODO_FOR_USER.md`.
 
 The terminal daemon is the technical heart of ClaudeCode Remote — the piece
 that makes "a terminal session survives an SSH drop and reappears on a

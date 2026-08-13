@@ -1,8 +1,9 @@
 # Idle Update System
 
-> **Status:** not implemented yet — planned for Phase 3, and depends on
-> [Server Base](Server-Base) (Phase 1) and [Agent Stack](Agent-Stack)
-> (Phase 2). This page describes the intended design, not a working system.
+> **Status:** implemented (Phase 3). 21 CI assertions cover the lock semantics,
+> including the asymmetry this page is mostly about: a stale agent lock is cleaned
+> after 6 h, a stale terminal lock never is, and a surviving terminal lock still
+> blocks the update. One deviation from the doc's sketch is documented below.
 
 This is the part of the design where the reliability of a small piece of
 lock logic decides whether the whole system is trustworthy. A stuck lock

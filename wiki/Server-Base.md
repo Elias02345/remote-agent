@@ -1,8 +1,10 @@
 # Server Base
 
-> **Status:** not implemented yet — planned for Phase 1. `server-provisioning/`
-> is currently an empty directory; there is no target server. This page
-> describes the intended design, not a working system.
+> **Status:** implemented (Phase 1). `server-provisioning/provision.sh` brings a
+> fresh Arch host into this state and is proven idempotent by a container harness
+> running it twice — 30 of 30 assertions in CI. **Not** verified on real hardware:
+> an sshd restart under systemd, fail2ban actually banning, and Tailscale bringing
+> up an interface. No target machine exists yet.
 
 The server base is the hardened Arch Linux host that everything else in
 ClaudeCode Remote sits on: the agent stack, the idle update system, the

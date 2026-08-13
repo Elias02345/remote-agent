@@ -1,8 +1,10 @@
 # Agent Stack
 
-> **Status:** not implemented yet — planned for Phase 2, and depends on
-> [Server Base](Server-Base) (Phase 1) existing first. This page describes
-> the intended design, not a working system.
+> **Status:** implemented (Phase 2). `agentctl` and `install-agent-stack.sh` ship
+> and are covered by 22 CI assertions, including a real `git checkout` and a real
+> `git merge` restoring a deleted symlink through the hooks. The Antigravity CLI
+> package name is deliberately not in the installer's default list — it could not
+> be verified, and a guessed name would fail on every run.
 
 The agent stack is the layer that installs Claude Code, Codex, and
 Antigravity CLI on the server and makes sure all three agree on the same

@@ -1,7 +1,8 @@
 # Roadmap and Decisions
 
-> **Status:** Phase 0 is done. Everything below Phase 0 is open — this page
-> describes the plan, not the current state of the code.
+> **Status:** Phases 0-5, 7 and 8 are done; Phase 6 is blocked on decision D-04
+> and Phase 9 is in progress. Decisions D-01 to D-11 below are the record of what
+> was chosen and why, including the ones that only surfaced during implementation.
 
 This page is the reader-facing view of
 [`ROADMAP.md`](https://github.com/Elias02345/remote-agent/blob/main/ROADMAP.md)

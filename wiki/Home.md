@@ -10,10 +10,10 @@ open a terminal once and it just keeps running until you explicitly close it.
 
 ## Current status
 
-> **Phase 0 (repo setup, architecture doc, wiki) is done. Nothing else is
-> built yet.** There is no server, no daemon binary, no app. Phases 1–9 are
-> all open. See [Roadmap and Decisions](Roadmap-and-Decisions) for what each
-> phase ships and in what order.
+> **Phases 0-5, 7 and 8 are built and covered by CI.** Phase 6 (public access)
+> is blocked on the WebAuthn domain, and Phase 9 (Android) is in progress.
+> Nothing has run on a real server yet — no target machine exists. See
+> [Roadmap and Decisions](Roadmap-and-Decisions).
 
 ## Start here
 

@@ -1,8 +1,9 @@
 # Networking and CloudGate
 
-> **Status:** not implemented yet — planned for Phase 6, blocked on D-04. No
-> CloudGate host is configured, no tunnel exists, no subdomain is live. This
-> page describes the intended design, not a working system.
+> **Status:** documented and scripted, **not connected** (Phase 6). `SETUP.md` and
+> `verify-tunnel.sh` exist; the latter is the Definition-of-Done check. Nothing is
+> live, because the domain (decision D-04) has not been chosen — and that choice
+> cannot be deferred past the passkey rollout without invalidating every passkey.
 
 This page covers how the daemon is meant to become reachable from outside
 the Tailscale mesh — a web browser, a phone on a foreign network — despite

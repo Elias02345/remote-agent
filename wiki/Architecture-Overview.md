@@ -1,7 +1,10 @@
 # Architecture Overview
 
-> **Status:** design only — nothing described here is implemented yet. See
-> [Roadmap and Decisions](Roadmap-and-Decisions) for build order.
+> **Status:** largely implemented. The server provisioning, the agent stack, the
+> idle updater, the terminal daemon, the file API and the security layer all ship
+> and are covered by CI. Outstanding: the CloudGate connection and the passkey
+> factor, both blocked on the WebAuthn domain (D-04), and the Android client.
+> See [Roadmap and Decisions](Roadmap-and-Decisions) for the per-phase state.
 
 ClaudeCode Remote is three layers that only work because each one deliberately
 does less than it could:

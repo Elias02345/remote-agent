@@ -1,8 +1,10 @@
 # Security Model
 
-> **Status:** not implemented yet — planned for Phase 7. No pairing flow,
-> owner login route, or device auth exists yet. This page describes the
-> intended design, not a working system.
+> **Status:** implemented (Phase 7), and deliberately unable to finish a pairing.
+> Argon2id, TOTP, Ed25519 device auth, step-up and rate limiting all ship and pass
+> under `-race`. The **passkey factor cannot be satisfied** while the WebAuthn
+> relying-party domain is undecided, so the three-factor chain refuses to complete.
+> That is the fail-closed behaviour it was built for, not a gap.
 
 This page covers how a device gets trusted in the first place, how it's
 trusted day to day afterward, and what happens when an already-trusted
