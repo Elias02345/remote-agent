@@ -15,8 +15,8 @@ the open decisions made during the phase — only then the next phase.
 | 2 | Agent stack | done |
 | 3 | Idle update system | done |
 | 4 | Terminal daemon MVP | done (visual DoD outstanding) |
-| 5 | Files & backups | in progress |
-| 6 | CloudGate connection | open |
+| 5 | Files & backups | done |
+| 6 | CloudGate connection | blocked on D-04 |
 | 7 | Security layer | open |
 | 8 | Client app skeleton | open |
 | 9 | Android & polish | open |
@@ -93,7 +93,12 @@ from 5.3, tested against a simple `xterm.js` test client (no Flutter needed).
 `htop`/`vim` as a test) runs visibly correctly in the test client, including
 alternate-screen switching and resize.
 
-## Phase 5 — Files & backups · `in progress`
+## Phase 5 — Files & backups · `done`
+
+**Verified:** 20 of 20 provisioning assertions plus the Go test suite. The
+harness runs `testparm` against the generated `smb.conf` and performs a real
+restic backup and restore, comparing the restored bytes against the source. The
+upload path is covered by resume, offset-conflict and tampered-content tests.
 
 **Scope:** Samba configuration (`backups`/`exchange`, Tailscale-only),
 restic timer, file API endpoints including SHA-256 double-checking and
@@ -102,7 +107,17 @@ restic timer, file API endpoints including SHA-256 double-checking and
 **Definition of Done:** A deliberately aborted upload can be resumed, a
 tampered chunk is rejected, a restore test timer demonstrably runs through.
 
-## Phase 6 — CloudGate connection · `open`
+## Phase 6 — CloudGate connection · `blocked on D-04`
+
+**Built:** `server-provisioning/cloudgate/SETUP.md` (host entries, tunnel mode,
+why the daemon needs no certificate) and `verify-tunnel.sh`, which is the
+Definition of Done check — it verifies a WebSocket upgrade survives the tunnel,
+which plain HTTPS success says nothing about. Also the fail-closed pairing state
+machine in `internal/identity`, so a half-finished Phase 7 cannot pair a device.
+
+**Blocked:** the DoD requires a real domain, a running CloudGate and the real
+server. None exist yet. The domain (D-04) is the one piece nobody but the owner
+can supply, and choosing it wrong invalidates every passkey later.
 
 **Scope:** Documentation/script for host setup in CloudGate (tunnel mode),
 record the final subdomain decision, owner login portal skeleton per
