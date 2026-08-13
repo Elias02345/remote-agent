@@ -13,6 +13,7 @@
 **Services**
 - [Terminal Daemon](Terminal-Daemon)
 - [Files and Backups](Files-and-Backups)
+- [Client App](Client-App)
 
 **Access & Security**
 - [Networking and CloudGate](Networking-and-CloudGate)
