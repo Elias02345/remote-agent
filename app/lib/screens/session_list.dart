@@ -78,7 +78,7 @@ class _SessionListScreenState extends State<SessionListScreen> {
     return Scaffold(
       backgroundColor: c.surfaceSunken,
       appBar: AppBar(
-        title: Text('Terminals', style: CcrType.title),
+        title: const Text('Terminals', style: CcrType.title),
         actions: [
           IconButton(
             tooltip: 'Refresh',
@@ -92,7 +92,7 @@ class _SessionListScreenState extends State<SessionListScreen> {
         backgroundColor: c.accentBase,
         foregroundColor: c.accentOn,
         icon: const Icon(Icons.add),
-        label: Text('New terminal', style: CcrType.label),
+        label: const Text('New terminal', style: CcrType.label),
       ),
       body: _buildBody(c),
     );

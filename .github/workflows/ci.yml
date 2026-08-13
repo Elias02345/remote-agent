@@ -120,11 +120,12 @@ jobs:
       - name: Resolve dependencies
         run: flutter pub get
 
-      # --fatal-warnings, not --fatal-infos: errors and warnings must fail the
-      # build, but style suggestions must not, or the job turns into noise
-      # nobody reads and a real error hides in it.
+      # `flutter analyze` treats infos as fatal by default, so --no-fatal-infos
+      # is required, not merely implied by --fatal-warnings. Errors and warnings
+      # still fail the build; style suggestions do not, or the job becomes noise
+      # nobody reads and a real error hides inside it.
       - name: Analyze
-        run: flutter analyze --fatal-warnings
+        run: flutter analyze --fatal-warnings --no-fatal-infos
 
       - name: Test
         run: flutter test

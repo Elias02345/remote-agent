@@ -29,8 +29,8 @@ void main() {
     });
 
     test('themes do not interpolate to an unchecked colour', () {
-      final a = CcrThemeExt(colors: CcrColors.dark, density: CcrDensity.pointer);
-      final b = CcrThemeExt(colors: CcrColors.light, density: CcrDensity.touch);
+      final a = const CcrThemeExt(colors: CcrColors.dark, density: CcrDensity.pointer);
+      final b = const CcrThemeExt(colors: CcrColors.light, density: CcrDensity.touch);
       // Every colour has a measured contrast ratio; a half-way blend is a
       // colour nobody checked.
       expect((a.lerp(b, 0.4)).colors.surfaceBase, CcrColors.dark.surfaceBase);
