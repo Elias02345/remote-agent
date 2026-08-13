@@ -38,7 +38,13 @@ enum LinkState {
 /// would kill the stream over a stray byte.
 class PtyTextDecoder {
   PtyTextDecoder() {
-    _sink = utf8.decoder.startChunkedConversion(
+    // allowMalformed: true is load-bearing, not defensive padding. The default
+    // `utf8.decoder` *throws* on an invalid byte, and real PTY output contains
+    // them — a binary file cat'd by accident, a truncated escape, a stray 0xFF.
+    // Throwing here would end the terminal stream over one bad byte, and the
+    // session would look dead while it is still running perfectly on the
+    // server.
+    _sink = const Utf8Decoder(allowMalformed: true).startChunkedConversion(
       ByteConversionSinkAdapter(_out),
     );
   }
