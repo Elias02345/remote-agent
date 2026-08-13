@@ -1,0 +1,26 @@
+name: claudecode_remote
+description: Persistent terminal sessions for coding agents, on your own server.
+publish_to: "none"
+version: 0.1.0
+
+environment:
+  sdk: ">=3.5.0 <4.0.0"
+  flutter: ">=3.24.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  # Terminal emulation happens entirely client-side (architecture Section 5.1);
+  # the daemon only moves raw bytes. xterm.dart is the same emulation layer
+  # that renders vim, htop and tmux correctly.
+  xterm: ^4.0.0
+  web_socket_channel: ^3.0.1
+  http: ^1.2.2
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^5.0.0
+
+flutter:
+  uses-material-design: true

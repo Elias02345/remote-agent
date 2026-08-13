@@ -96,6 +96,36 @@ jobs:
       - name: Run backup harness
         run: bash server-provisioning/test/run-backup-tests.sh
 
+  app:
+    name: Flutter analyze and test
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      # The only third-party action in this workflow. There is no practical
+      # alternative: installing the Flutter SDK by hand means fetching a
+      # tarball, pinning a channel and managing its cache, which is exactly
+      # what this action does and does correctly.
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.24.5'
+          channel: stable
+          cache: true
+
+      - name: Resolve dependencies
+        run: flutter pub get
+
+      - name: Analyze
+        run: flutter analyze --fatal-infos
+
+      - name: Test
+        run: flutter test
+
   daemon:
     name: Daemon build and tests
     runs-on: ubuntu-latest
