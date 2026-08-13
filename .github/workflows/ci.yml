@@ -84,3 +84,34 @@ jobs:
 
       - name: Run idle update harness
         run: bash server-provisioning/test/run-idle-update-tests.sh
+
+  daemon:
+    name: Daemon build and tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: daemon
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+
+      # go.sum is resolved here rather than committed: no machine with Go was
+      # available while this was written, so the hashes could not be generated
+      # locally. See TODO_FOR_USER.md -- commit the go.sum this produces once a
+      # Go toolchain is at hand, so builds become reproducible.
+      - name: Resolve dependencies
+        run: go mod tidy
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test
+        run: go test ./... -count=1
+
+      - name: Build
+        run: go build ./...

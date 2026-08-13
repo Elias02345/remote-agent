@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>ClaudeCode Remote — test client</title>
+<!--
+  Phase 4 protocol test client. Its job is to prove that raw PTY passthrough
+  renders a real full-screen TUI correctly before the Flutter app exists; it is
+  not a shipping UI and has no authentication (that is Phase 7).
+
+  xterm.js is loaded from a CDN rather than vendored: this page is only ever
+  served to a developer on localhost, and vendoring a bundle into the daemon
+  binary would be weight for something the Flutter client replaces.
+-->
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.css">
+<style>
+  body { font-family: system-ui, sans-serif; margin: 0; background: #1e1e1e; color: #ddd; }
+  header { padding: .6rem 1rem; background: #252526; display: flex; gap: .5rem; align-items: center; flex-wrap: wrap; }
+  button, input { font: inherit; padding: .3rem .6rem; background: #333; color: #eee; border: 1px solid #555; border-radius: 3px; }
+  button:hover { background: #3c3c3c; cursor: pointer; }
+  #sessions { display: flex; gap: .4rem; flex-wrap: wrap; }
+  #sessions button.active { border-color: #4ec9b0; color: #4ec9b0; }
+  #status { margin-left: auto; font-size: .85rem; color: #888; }
+  #term { height: calc(100vh - 3.2rem); padding: .3rem; }
+</style>
+</head>
+<body>
+<header>
+  <button id="new">New terminal</button>
+  <div id="sessions"></div>
+  <span id="status">disconnected</span>
+</header>
+<div id="term"></div>
+
+<script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.js"></script>
+<script>
+const term = new Terminal({ convertEol: false, cursorBlink: true, fontSize: 14 });
+const fit = new FitAddon.FitAddon();
+term.loadAddon(fit);
+term.open(document.getElementById('term'));
+fit.fit();
+
+const statusEl = document.getElementById('status');
+let socket = null;
+let currentID = null;
+
+const setStatus = (text, color) => { statusEl.textContent = text; statusEl.style.color = color || '#888'; };
+
+// The daemon sends terminal output base64-encoded because PTY output is
+// arbitrary binary, not valid UTF-8. Decoding to a byte array and letting
+// xterm.js handle it keeps escape sequences intact; going through a JS string
+// would mangle them.
+function decode(b64) {
+  const bin = atob(b64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return bytes;
+}
+
+function encode(str) {
+  const bytes = new TextEncoder().encode(str);
+  let bin = '';
+  for (const b of bytes) bin += String.fromCharCode(b);
+  return btoa(bin);
+}
+
+async function refresh() {
+  const res = await fetch('/sessions');
+  const list = await res.json();
+  const box = document.getElementById('sessions');
+  box.innerHTML = '';
+  for (const s of list) {
+    const b = document.createElement('button');
+    b.textContent = (s.name || s.id) + (s.cwd ? ' · ' + s.cwd : '');
+    if (s.id === currentID) b.classList.add('active');
+    b.onclick = () => open(s.id);
+    box.appendChild(b);
+
+    const x = document.createElement('button');
+    x.textContent = '×';
+    x.title = 'Close this terminal permanently';
+    x.onclick = async () => {
+      if (!confirm('Close this terminal? Closing is the only way a session ends.')) return;
+      await fetch('/sessions/' + s.id, { method: 'DELETE' });
+      if (currentID === s.id && socket) socket.close();
+      refresh();
+    };
+    box.appendChild(x);
+  }
+}
+
+function sendResize() {
+  if (socket && socket.readyState === WebSocket.OPEN) {
+    socket.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows }));
+  }
+}
+
+function open(id) {
+  if (socket) { socket.close(); socket = null; }
+  currentID = id;
+  term.reset();
+
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  socket = new WebSocket(`${proto}//${location.host}/sessions/${id}/stream`);
+
+  socket.onopen = () => { setStatus('connected', '#4ec9b0'); sendResize(); refresh(); };
+  socket.onclose = () => setStatus('disconnected', '#f48771');
+  socket.onerror = () => setStatus('error', '#f48771');
+  socket.onmessage = (ev) => {
+    const msg = JSON.parse(ev.data);
+    if (msg.type === 'output') term.write(decode(msg.data));
+    else if (msg.type === 'exit') setStatus('session ended', '#f48771');
+  };
+}
+
+term.onData((data) => {
+  if (socket && socket.readyState === WebSocket.OPEN) {
+    socket.send(JSON.stringify({ type: 'input', data: encode(data) }));
+  }
+});
+
+document.getElementById('new').onclick = async () => {
+  const res = await fetch('/sessions', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({})
+  });
+  const s = await res.json();
+  await refresh();
+  open(s.id);
+};
+
+window.addEventListener('resize', () => { fit.fit(); sendResize(); });
+refresh();
+</script>
+</body>
+</html>

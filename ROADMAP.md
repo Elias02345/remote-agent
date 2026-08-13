@@ -13,8 +13,8 @@ the open decisions made during the phase — only then the next phase.
 | 0 | Repo setup, architecture doc, wiki | done |
 | 1 | Server foundation | done |
 | 2 | Agent stack | done |
-| 3 | Idle update system | in progress |
-| 4 | Terminal daemon MVP | open |
+| 3 | Idle update system | done |
+| 4 | Terminal daemon MVP | in progress |
 | 5 | Files & backups | open |
 | 6 | CloudGate connection | open |
 | 7 | Security layer | open |
@@ -60,7 +60,11 @@ deleted symlink through the hooks, rather than a hand-invoked hook.
 **Definition of Done:** In a test repo, `agentctl init` correctly creates the
 three symlinks; Git hooks trigger it automatically on checkout/merge.
 
-## Phase 3 — Idle update system · `in progress`
+## Phase 3 — Idle update system · `done`
+
+**Verified:** 21 of 21 assertions green in CI, including the asymmetry the design
+rests on — a stale agent lock is cleaned after 6 h, a stale terminal lock is not,
+and a surviving terminal lock still blocks the update.
 
 **Scope:** `agent-run` wrapper, lock-directory logic (both lock types tested
 separately), systemd timer, ntfy integration.
@@ -69,7 +73,7 @@ separately), systemd timer, ntfy integration.
 exists, that agent locks disappear after 6 h of stale cleanup, and that
 terminal locks do not.
 
-## Phase 4 — Terminal daemon MVP · `open`
+## Phase 4 — Terminal daemon MVP · `in progress`
 
 **Scope:** Go service, REST+WebSocket API from Section 5.2, SQLite schema
 from 5.3, tested against a simple `xterm.js` test client (no Flutter needed).
