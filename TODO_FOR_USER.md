@@ -36,6 +36,25 @@ Legend: 🔴 blocks a phase · 🟡 needed before phase completion · ⚪ nice t
       it for the `admin` user. Without the key you lock yourself out after
       the SSH hardening.
 
+### 🟡 Confirm the Phase 4 visual Definition of Done (needs a human at a browser)
+The daemon's protocol is covered by unit tests and CI, but "a full-screen TUI
+renders correctly" cannot be asserted by a test — someone has to look at it.
+On a machine with `tmux` and Go:
+
+```bash
+cd daemon && go run ./cmd/claudecode-remoted --db /tmp/ccr.db --lock-dir /tmp/ccr-locks
+```
+
+- [ ] Open <http://127.0.0.1:8080>, click **New terminal**, run `htop` and
+      `vim` and confirm both render correctly, including colours and borders.
+- [ ] Leave `vim`, and confirm the screen underneath is restored — that proves
+      alternate-screen switching (`?1049h`/`?1049l`) survives the passthrough.
+- [ ] Resize the browser window and confirm the layout reflows.
+- [ ] Open the same session in a second tab, type in one, and confirm the other
+      keeps working — that is `window-size latest` doing its job.
+- [ ] Run Claude Code itself in a session; it is the actual target and the most
+      demanding renderer of the three.
+
 ### 🟡 Confirm the Antigravity CLI install command (before Phase 2 completion)
 - [ ] `install-agent-stack.sh` installs the coding agents from an npm package
       list. Claude Code (`@anthropic-ai/claude-code`) and Codex

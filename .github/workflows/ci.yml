@@ -100,12 +100,17 @@ jobs:
         with:
           go-version: '1.23'
 
-      # go.sum is resolved here rather than committed: no machine with Go was
-      # available while this was written, so the hashes could not be generated
-      # locally. See TODO_FOR_USER.md -- commit the go.sum this produces once a
-      # Go toolchain is at hand, so builds become reproducible.
-      - name: Resolve dependencies
-        run: go mod tidy
+      - name: Download dependencies
+        run: go mod download
+
+      # go.sum is committed, so CI verifies against pinned hashes rather than
+      # re-resolving on every run. This step fails if go.mod/go.sum drift out
+      # of sync with the imports -- otherwise a dependency could change
+      # underneath the build without anything in the repo recording it.
+      - name: Verify go.mod and go.sum are in sync
+        run: |
+          go mod tidy
+          git diff --exit-code go.mod go.sum
 
       - name: Vet
         run: go vet ./...

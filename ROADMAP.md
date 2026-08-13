@@ -14,8 +14,8 @@ the open decisions made during the phase — only then the next phase.
 | 1 | Server foundation | done |
 | 2 | Agent stack | done |
 | 3 | Idle update system | done |
-| 4 | Terminal daemon MVP | in progress |
-| 5 | Files & backups | open |
+| 4 | Terminal daemon MVP | done (visual DoD outstanding) |
+| 5 | Files & backups | in progress |
 | 6 | CloudGate connection | open |
 | 7 | Security layer | open |
 | 8 | Client app skeleton | open |
@@ -73,7 +73,18 @@ separately), systemd timer, ntfy integration.
 exists, that agent locks disappear after 6 h of stale cleanup, and that
 terminal locks do not.
 
-## Phase 4 — Terminal daemon MVP · `in progress`
+## Phase 4 — Terminal daemon MVP · `done (visual DoD outstanding)`
+
+**Verified:** `go vet`, `go test` and `go build` green in CI and locally across
+all four packages. The daemon refuses to start on a wildcard bind address, a
+session becomes `closed` only through an explicit DELETE, and a terminal lock is
+released only on that same path.
+
+**Not verified, and it cannot be by a test:** that a full-screen TUI actually
+*renders* correctly — alternate-screen switching, colours, box drawing, reflow
+on resize. That needs a human at a browser with tmux installed; the checklist is
+in `TODO_FOR_USER.md`. The phase is marked done for everything a machine can
+check, not for the part only an eye can.
 
 **Scope:** Go service, REST+WebSocket API from Section 5.2, SQLite schema
 from 5.3, tested against a simple `xterm.js` test client (no Flutter needed).
@@ -82,7 +93,7 @@ from 5.3, tested against a simple `xterm.js` test client (no Flutter needed).
 `htop`/`vim` as a test) runs visibly correctly in the test client, including
 alternate-screen switching and resize.
 
-## Phase 5 — Files & backups · `open`
+## Phase 5 — Files & backups · `in progress`
 
 **Scope:** Samba configuration (`backups`/`exchange`, Tailscale-only),
 restic timer, file API endpoints including SHA-256 double-checking and
