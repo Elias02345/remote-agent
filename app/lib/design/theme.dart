@@ -68,7 +68,7 @@ ThemeData buildTheme({
     // defaults put shadows on cards and app bars; that is precisely the look
     // the design system rejects, so they are turned off explicitly rather
     // than left to chance.
-    cardTheme: CardTheme(
+    cardTheme: CardThemeData(
       color: c.surfaceRaised,
       elevation: 0,
       margin: EdgeInsets.zero,
@@ -82,7 +82,7 @@ ThemeData buildTheme({
       elevation: 0,
       scrolledUnderElevation: 0,
     ),
-    dialogTheme: DialogTheme(
+    dialogTheme: DialogThemeData(
       backgroundColor: c.surfaceOverlay,
       elevation: 0,
       shape: RoundedRectangleBorder(

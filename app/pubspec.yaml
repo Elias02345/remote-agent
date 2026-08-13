@@ -16,6 +16,10 @@ dependencies:
   xterm: ^4.0.0
   web_socket_channel: ^3.0.1
   http: ^1.2.2
+  # SHA-256 for the client-side half of the double hash check (architecture
+  # Section 8.2). Not in dart:core, and this is the standard pub package for
+  # it rather than hand-rolling the algorithm.
+  crypto: ^3.0.3
 
 dev_dependencies:
   flutter_test:

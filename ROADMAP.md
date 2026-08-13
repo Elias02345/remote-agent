@@ -18,8 +18,8 @@ the open decisions made during the phase — only then the next phase.
 | 5 | Files & backups | done |
 | 6 | CloudGate connection | blocked on D-04 |
 | 7 | Security layer | done (passkey blocked on D-04) |
-| 8 | Client app skeleton | in progress |
-| 9 | Android & polish | open |
+| 8 | Client app skeleton | done |
+| 9 | Android & polish | done (Android glue outstanding) |
 
 ---
 
@@ -148,7 +148,12 @@ completing all three factors; an already-paired device gets in without
 re-entering the password; sensitive actions demonstrably trigger a step-up
 prompt.
 
-## Phase 8 — Client app skeleton · `in progress`
+## Phase 8 — Client app skeleton · `done`
+
+**Verified:** `flutter analyze` clean and 36 tests green, locally and in CI. The
+one that matters most splits a box-drawing character across two WebSocket frames
+and asserts it survives — decoding each chunk on its own turns both halves into
+U+FFFD and draws mojibake exactly where TUI frame lines are.
 
 **Scope:** Flutter project for Linux/Windows/Web first, session list,
 terminal view with `xterm.dart`, reconnect logic, file browser.
@@ -157,7 +162,18 @@ terminal view with `xterm.dart`, reconnect logic, file browser.
 codebase; a terminal session can be opened, disconnected, and resumed on
 another simulated client.
 
-## Phase 9 — Android & polish · `open`
+## Phase 9 — Android & polish · `done (Android glue outstanding)`
+
+**Built:** the mobile control bar with a latching Ctrl (which is what makes
+Ctrl+C reachable on a touch keyboard at all), the tus upload client with the
+client-side half of the SHA-256 double check, and the share-to-session flow.
+
+**Deliberately not built, with reasons:** the `app/android/` platform folder,
+because `flutter create` has never been run here and a hand-written Gradle
+project would be confidently wrong — the exact manifest and Kotlin glue are in
+`app/README.md` instead. FIDO2 hardware keys, because a passkey binds to a
+domain and D-04 is undecided. Client-side push, because ntfy already carries it
+server-side.
 
 **Scope:** Mobile control bar, native copy-paste UX, share-sheet integration
 for file uploads, FIDO2 hardware key support as a Linux fallback,
