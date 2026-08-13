@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+# agent-run — transparent lock wrapper for coding agent invocations
+# (docs/ARCHITECTURE.md Section 4.2). Installed to /usr/local/bin/agent-run.
+#
+# Creates /run/claudecode-locks/agent-<pid> for the duration of the wrapped
+# command so the idle updater knows something is running, and removes it again
+# on exit — including on error, Ctrl-C and SIGTERM.
+#
+# DELIBERATE DEVIATION FROM THE SKETCH IN SECTION 4.2:
+#
+#   The doc's version ends with `trap 'rm -f "$LOCK_FILE"' EXIT` followed by
+#   `exec "$@"`. That does not work: exec replaces this shell's process image,
+#   which discards every trap with it, so the EXIT trap never fires and the
+#   lock file leaks on *every* run. It would then linger until the 6 h stale
+#   cleanup — exactly the "a forgotten lock blocks updates" failure the wrapper
+#   exists to prevent.
+#
+#   So the command runs as a child instead of via exec, and the wrapper stays
+#   alive to clean up. The cost is one extra shell process per agent
+#   invocation; the benefit is that the doc's stated intent — "reliably removes
+#   it again even on errors" — is actually true. INT and TERM are forwarded to
+#   the child so interactive Ctrl-C still behaves normally.
+set -Eeuo pipefail
+
+LOCK_DIR="${CCR_LOCK_DIR:-/run/claudecode-locks}"
+
+if [[ $# -eq 0 ]]; then
+  echo "Usage: agent-run <command> [args...]" >&2
+  exit 1
+fi
+
+mkdir -p "$LOCK_DIR"
+LOCK_FILE="${LOCK_DIR}/agent-$$"
+
+# shellcheck disable=SC2317  # invoked indirectly by the EXIT trap below
+cleanup() { rm -f "$LOCK_FILE"; }
+trap cleanup EXIT
+
+: > "$LOCK_FILE"
+
+"$@" &
+child=$!
+
+# Forward interactive signals so Ctrl-C reaches the agent rather than only
+# killing the wrapper and orphaning it.
+trap 'kill -INT "$child" 2>/dev/null || true' INT
+trap 'kill -TERM "$child" 2>/dev/null || true' TERM
+
+status=0
+wait "$child" || status=$?
+exit "$status"

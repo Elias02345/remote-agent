@@ -1,0 +1,8 @@
+[Unit]
+Description=Check idle status and update the system
+Documentation=https://github.com/Elias02345/remote-agent/wiki/Idle-Update-System
+
+[Service]
+Type=oneshot
+EnvironmentFile=-/etc/claudecode-remote/.env
+ExecStart=/usr/local/bin/idle-update-check.sh

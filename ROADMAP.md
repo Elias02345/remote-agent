@@ -12,8 +12,8 @@ the open decisions made during the phase — only then the next phase.
 |---|---|---|
 | 0 | Repo setup, architecture doc, wiki | done |
 | 1 | Server foundation | done |
-| 2 | Agent stack | in progress |
-| 3 | Idle update system | open |
+| 2 | Agent stack | done |
+| 3 | Idle update system | in progress |
 | 4 | Terminal daemon MVP | open |
 | 5 | Files & backups | open |
 | 6 | CloudGate connection | open |
@@ -47,7 +47,11 @@ idempotency (running it multiple times breaks nothing). The container-based
 test harness runs the provisioning scripts against a fresh Arch container
 twice and passes both times, proving idempotency without real hardware.
 
-## Phase 2 — Agent stack · `in progress`
+## Phase 2 — Agent stack · `done`
+
+**Verified:** 22 of 22 assertions green in CI. The Definition of Done is proven
+with a real repository — a real `git checkout` and a real `git merge` restore a
+deleted symlink through the hooks, rather than a hand-invoked hook.
 
 **Scope:** Installation scripts for Claude Code / Codex / Antigravity CLI,
 `agentctl init` including Git hooks, distribution of the global
@@ -56,7 +60,7 @@ twice and passes both times, proving idempotency without real hardware.
 **Definition of Done:** In a test repo, `agentctl init` correctly creates the
 three symlinks; Git hooks trigger it automatically on checkout/merge.
 
-## Phase 3 — Idle update system · `open`
+## Phase 3 — Idle update system · `in progress`
 
 **Scope:** `agent-run` wrapper, lock-directory logic (both lock types tested
 separately), systemd timer, ntfy integration.
@@ -141,6 +145,7 @@ finished yet — exceptions: D-04 and D-05, see there.
 | D-06 | Couple CloudGate self-update to the lock | **No.** The short `cloudflared` reload window is accepted; noted as a feature idea in the CloudGate repo, not a blocker here | — | any time |
 | D-07 | Full three-factor chain on every pairing | **Yes, without exception.** No reduced tier for "trusted networks" | Phase 7 | End of Phase 7 |
 | D-08 | MD5 vs. SHA-256 for file hashes | **SHA-256** — already fixed as non-negotiable in the prompt | Phase 5 | — |
+| D-11 | `agent-run`: `exec` (as sketched in Section 4.2) vs. child process | **Child process.** The sketch in Section 4.2 sets an EXIT trap and then calls `exec "$@"`, but `exec` replaces the shell's process image and discards every trap with it — the trap never fires and the lock leaks on **every** run, lingering until the 6 h stale cleanup. That is the exact failure the wrapper exists to prevent, so the letter of the sketch was dropped to keep its stated intent ("reliably removes it again even on errors"). Cost: one extra shell process per agent invocation; INT/TERM are forwarded to the child so Ctrl-C still behaves. | Phase 3 | reopen only if someone demonstrates the trap firing after `exec` |
 | D-10 | `admin` sudo: password-gated vs. `NOPASSWD` | **Password-gated** via its own `/etc/sudoers.d/admin` drop-in. Not in Section 12 — it surfaced in Phase 1, because `PermitRootLogin no` plus no sudo path for `admin` left the machine administrable only from the physical console. `NOPASSWD` was rejected: SSH is key-only, so a stolen admin key would otherwise be instant root. Cost: the operator must supply `CCR_ADMIN_PASSWORD_HASH` or run `passwd admin` before closing the root session; `provision.sh` warns loudly when neither happened. | Phase 1 | any time, but flipping to `NOPASSWD` weakens the model — reopen only deliberately |
 | D-09 | Documentation language | **English throughout** (wiki, READMEs, script output, commit messages), because the repo is public. The German original of the architecture doc is preserved as `docs/ARCHITECTURE.de.md`. | all phases | any time, but costly |
 
@@ -154,11 +159,14 @@ are decisions the doc defers, which the implementing phase has to make explicitl
 than by accident. Each must be resolved *before* the listed phase is declared done, and
 the resolution recorded here as a `D-xx` row.
 
+**Resolved so far:** G-01 and G-05. Their rows are struck through below rather
+than deleted — how a gap was closed is worth as much as that it was.
+
 | ID | Gap | Why it matters | Resolve in |
 |---|---|---|---|
-| G-01 | A running tmux session can exist **without** a terminal lock — created manually via `tmux new`, or predating the daemon. The lock directory is therefore not a complete picture of session state. | Section 4.4 already treats this as the reason not to auto-reboot on idle, but never says how the gap arises or whether the idle check should additionally consult `tmux ls` instead of trusting locks alone. Getting this wrong either blocks updates forever or kills a live session. | Phase 3 |
+| ~~G-01~~ **resolved (Phase 3)** | A running tmux session can exist **without** a terminal lock — created manually via `tmux new`, or predating the daemon. The lock directory is therefore not a complete picture of session state. | Section 4.4 already treats this as the reason not to auto-reboot on idle, but never says how the gap arises or whether the idle check should additionally consult `tmux ls` instead of trusting locks alone. Getting this wrong either blocks updates forever or kills a live session. | **Resolved:** the update gate stays lock-based, as the doc specifies. Blocking on `tmux ls` was rejected — a forgotten manual session would then block updates forever, reintroducing the very failure the stale cleanup exists to prevent, and a package update does not kill tmux sessions anyway. Instead `idle-update-check.sh` logs a line when unlocked tmux sessions exist, so the discrepancy is visible. The real tmux query belongs in the reboot path, which D-03 defers. |
 | G-02 | Auth mechanism for the `/files/*` endpoints is unspecified. | Section 8.1 defines the allowlist and the `agent`-user sandboxing, but never says whether file requests use the same Ed25519 challenge-response as the WebSocket, a token derived from it, or something else. An unauthenticated file API would bypass the entire device-pairing model. | Phase 5 |
 | G-03 | Step-up re-auth protocol is unspecified. | Section 10 lists *which* actions require step-up but not the mechanics: a fresh WebAuthn ceremony per action, or a short-lived step-up token with a TTL? A token with too long a TTL silently degrades step-up into a single prompt per session. | Phase 7 |
 | G-04 | "Short-lived session key" for the web client is undefined. | Section 5.4 rules out persistent key storage in the browser but gives no lifetime, no reissue rule, and no scope (per tab? per login?). | Phase 7/8 |
-| G-05 | The `post-checkout` / `post-merge` hook bodies for `agentctl init` are described in prose only. | Low risk — the doc states the intent clearly, the implementation is straightforward. Recorded so the hooks are written deliberately rather than improvised. | Phase 2 |
+| ~~G-05~~ **resolved (Phase 2)** | The `post-checkout` / `post-merge` hook bodies for `agentctl init` are described in prose only. | **Resolved:** hooks are written by `agentctl install-hooks`, carry a `# managed-by: agentctl` marker so a foreign hook is never clobbered, guard with `command -v agentctl \|\| exit 0` so a clone on a machine without it does not error on every checkout, and `post-checkout` acts only when its third argument is `1` (a real branch switch, not a file checkout). | Phase 2 |
 | G-06 | The `inotifywait` watcher on `from-agent/` is explicitly marked "optional" in Section 7.3. | Needs a yes/no decision rather than silently shipping or silently skipping it. | Phase 5 |

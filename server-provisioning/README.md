@@ -187,6 +187,60 @@ byte, and — the Phase 2 Definition of Done — that a real `git checkout` and 
 real `git merge` actually restore a deleted symlink through the hooks. This
 harness runs in CI alongside the provisioning one.
 
+## The idle update system (Phase 3)
+
+`install-idle-updater.sh` installs the pieces from architecture Section 4. Run
+it after `provision.sh`:
+
+```bash
+sudo bash install-idle-updater.sh
+```
+
+It places `agent-run` and `idle-update-check.sh` in `/usr/local/bin`, creates
+`/run/claudecode-locks` (plus a `tmpfiles.d` entry, since `/run` is a tmpfs and
+vanishes on reboot) and `/var/lib/claudecode`, drops shell aliases in
+`/etc/profile.d/claudecode-agents.sh`, and enables `idle-updater.timer`
+(5 min after boot, then every 30 min).
+
+### Two lock types, and why they behave differently
+
+| Lock | Created by | Lifetime |
+|---|---|---|
+| `agent-<pid>` | `agent-run`, automatically | removed on exit; stale ones cleaned after 6 h |
+| `terminal-<session-id>` | the terminal daemon (Phase 4) | **unlimited** — only closing the terminal removes it |
+
+The asymmetry is deliberate. An agent lock belongs to a process that may have
+been `SIGKILL`ed or lost to a power cut, so it needs a time-based escape hatch
+or a crash blocks updates forever. A terminal lock belongs to a session that
+only the user closes; expiring it would mean updating underneath a terminal
+that is still open. Widening the cleanup's `-name 'agent-*'` filter to `'*'`
+would quietly destroy this distinction — there is a test that fails if anyone
+does.
+
+The `reboot-pending` flag lives in `/var/lib/claudecode/`, deliberately
+**outside** the lock directory: a file inside it would count as an active lock
+and block every future update permanently.
+
+**Reboots are never automatic.** A kernel update only raises the flag
+(decision D-03); a human reboots.
+
+### agent-run does not use `exec`
+
+Architecture Section 4.2 sketches the wrapper as a `trap ... EXIT` followed by
+`exec "$@"`. That does not work: `exec` replaces the shell's process image and
+discards every trap with it, so the lock would leak on every run and survive
+until the 6 h cleanup — the exact failure the wrapper exists to prevent. The
+command therefore runs as a child and the wrapper stays alive to clean up, with
+`INT`/`TERM` forwarded so Ctrl-C still reaches the agent. Recorded as decision
+D-11.
+
+Run the tests with:
+
+```bash
+cd server-provisioning/test
+./run-idle-update-tests.sh
+```
+
 ## What the test harness cannot cover
 
 The container has no systemd as init by design (see `test/Containerfile`),

@@ -1,0 +1,10 @@
+[Unit]
+Description=Idle-based system update timer
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=30min
+Unit=idle-updater.service
+
+[Install]
+WantedBy=timers.target

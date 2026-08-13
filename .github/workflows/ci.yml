@@ -17,27 +17,26 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y shellcheck
 
-      - name: bash -n syntax check
+      - name: Lint shell scripts
         run: |
           set -euo pipefail
+          # Select by shebang, not by extension. Several scripts here are
+          # installed as commands and deliberately have no .sh suffix
+          # (agentctl, agent-run); an extension filter silently skipped them,
+          # so they went unlinted until it was noticed by hand. Matching the
+          # first line instead needs no maintenance when the next one appears.
+          # Only the first line counts: docs/ARCHITECTURE.md quotes shebangs
+          # inside code blocks and must not be fed to shellcheck.
           status=0
           while IFS= read -r -d '' f; do
-            echo "syntax check: ${f}"
+            head -n1 "$f" | grep -Eq '^#!.*(bash|sh)$' || continue
+            echo "linting: ${f}"
             bash -n "$f" || status=1
-          done < <(find . -path ./.git -prune -o \( -name '*.sh' -o -name 'agentctl' \) -print0)
-          exit "$status"
-
-      - name: shellcheck
-        run: |
-          set -euo pipefail
-          status=0
-          while IFS= read -r -d '' f; do
-            echo "shellcheck: ${f}"
             # -x follows sourced files. Without it, provision.sh sourcing
             # lib/common.sh is reported as SC1091 and the build fails on a
             # finding that says nothing about the code.
             shellcheck -x "$f" || status=1
-          done < <(find . -path ./.git -prune -o \( -name '*.sh' -o -name 'agentctl' \) -print0)
+          done < <(find . \( -name .git -o -name .wiki-clone \) -prune -o -type f -print0)
           exit "$status"
 
   # ponytail: this job now runs for real. It was originally left out with a
@@ -74,3 +73,14 @@ jobs:
 
       - name: Run agentctl harness
         run: bash server-provisioning/test/run-agentctl-tests.sh
+
+  idle-update-harness:
+    name: Idle update container harness
+    needs: shellcheck
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Run idle update harness
+        run: bash server-provisioning/test/run-idle-update-tests.sh
