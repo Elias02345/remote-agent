@@ -177,7 +177,7 @@ class _SessionRow extends StatelessWidget {
         child: Row(
           children: [
             // Status is not shown by colour alone — StatusDot varies its shape.
-            const StatusDot(state: ConnectionState.connected),
+            const StatusDot(state: LinkState.connected),
             const SizedBox(width: CcrSpace.s2),
             Expanded(
               child: Column(

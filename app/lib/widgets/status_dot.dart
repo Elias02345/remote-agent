@@ -23,26 +23,26 @@ import '../design/tokens.dart';
 class StatusDot extends StatelessWidget {
   const StatusDot({super.key, required this.state, this.semanticLabel});
 
-  final ConnectionState state;
+  final LinkState state;
   final String? semanticLabel;
 
   static const _dotSize = 8.0;
   static const _hitArea = 20.0;
 
   Color _color(CcrColors c) => switch (state) {
-        ConnectionState.connected => c.statusConnected,
-        ConnectionState.connecting => c.statusConnecting,
-        ConnectionState.reconnecting => c.statusConnecting,
-        ConnectionState.disconnected => c.statusDisconnected,
-        ConnectionState.ended => c.statusEnded,
+        LinkState.connected => c.statusConnected,
+        LinkState.connecting => c.statusConnecting,
+        LinkState.reconnecting => c.statusConnecting,
+        LinkState.disconnected => c.statusDisconnected,
+        LinkState.ended => c.statusEnded,
       };
 
   String get _label => switch (state) {
-        ConnectionState.connected => 'connected',
-        ConnectionState.connecting => 'connecting',
-        ConnectionState.reconnecting => 'reconnecting',
-        ConnectionState.disconnected => 'disconnected',
-        ConnectionState.ended => 'session ended',
+        LinkState.connected => 'connected',
+        LinkState.connecting => 'connecting',
+        LinkState.reconnecting => 'reconnecting',
+        LinkState.disconnected => 'disconnected',
+        LinkState.ended => 'session ended',
       };
 
   @override
@@ -68,7 +68,7 @@ class StatusDot extends StatelessWidget {
 class _DotPainter extends CustomPainter {
   const _DotPainter({required this.state, required this.color});
 
-  final ConnectionState state;
+  final LinkState state;
   final Color color;
 
   @override
@@ -84,17 +84,17 @@ class _DotPainter extends CustomPainter {
     final centre = Offset(size.width / 2, size.height / 2);
 
     switch (state) {
-      case ConnectionState.connected:
+      case LinkState.connected:
         canvas.drawCircle(centre, size.width / 2, fill);
-      case ConnectionState.connecting:
-      case ConnectionState.reconnecting:
+      case LinkState.connecting:
+      case LinkState.reconnecting:
         // A ring, not a smaller dot: hollow reads as "not settled yet" without
         // animation. Nothing here pulses — a blinking indicator next to
         // scrolling terminal output is a distraction the user cannot escape.
         canvas.drawCircle(centre, size.width / 2 - 0.75, stroke);
-      case ConnectionState.disconnected:
+      case LinkState.disconnected:
         canvas.drawRect(Offset.zero & size, fill);
-      case ConnectionState.ended:
+      case LinkState.ended:
         canvas.drawRect(
           Rect.fromLTWH(0, centre.dy - 1, size.width, 2),
           fill,

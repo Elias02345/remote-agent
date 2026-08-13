@@ -71,7 +71,7 @@ void main() {
         (tester) async {
       // Colour alone fails for colour-vision deficiencies, and this dot is
       // often the only difference between two otherwise identical rows.
-      for (final state in ConnectionState.values) {
+      for (final state in LinkState.values) {
         await tester.pumpWidget(
           MaterialApp(
             theme: buildTheme(brightness: Brightness.dark, density: CcrDensity.pointer),

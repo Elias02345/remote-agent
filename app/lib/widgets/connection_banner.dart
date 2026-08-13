@@ -21,12 +21,12 @@ import '../design/tokens.dart';
 class ConnectionBanner extends StatelessWidget {
   const ConnectionBanner({super.key, required this.state});
 
-  final ConnectionState state;
+  final LinkState state;
 
   static const _transientHeight = 26.0;
   static const _disconnectedHeight = 60.0;
 
-  bool get _isVisible => state != ConnectionState.connected;
+  bool get _isVisible => state != LinkState.connected;
 
   @override
   Widget build(BuildContext context) {
@@ -34,19 +34,19 @@ class ConnectionBanner extends StatelessWidget {
 
     final c = context.ccr;
     final (Color edge, String text, String? detail) = switch (state) {
-      ConnectionState.connecting => (c.statusConnecting, 'Connecting…', null),
-      ConnectionState.reconnecting => (c.statusConnecting, 'Reconnecting…', null),
-      ConnectionState.disconnected => (
+      LinkState.connecting => (c.statusConnecting, 'Connecting…', null),
+      LinkState.reconnecting => (c.statusConnecting, 'Reconnecting…', null),
+      LinkState.disconnected => (
           c.statusDisconnected,
           'This device lost the connection.',
           'The session keeps running on the server. Reconnecting automatically.',
         ),
-      ConnectionState.ended => (
+      LinkState.ended => (
           c.statusEnded,
           'This session has ended.',
           'It was closed explicitly; nothing is running any more.',
         ),
-      ConnectionState.connected => (c.statusConnected, '', null),
+      LinkState.connected => (c.statusConnected, '', null),
     };
 
     final tall = detail != null;

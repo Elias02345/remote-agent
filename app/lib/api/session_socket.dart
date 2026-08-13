@@ -11,7 +11,7 @@ import 'dart:convert';
 import 'package:web_socket_channel/web_socket_channel.dart';
 
 /// Connection state, mapped 1:1 onto the design system's status tokens.
-enum ConnectionState {
+enum LinkState {
   connecting,
   connected,
   reconnecting,
@@ -152,13 +152,13 @@ class SessionSocket {
   bool _closedByUser = false;
 
   final _output = StreamController<String>.broadcast();
-  final _state = StreamController<ConnectionState>.broadcast();
+  final _state = StreamController<LinkState>.broadcast();
 
   /// Decoded terminal text, ready to hand to the emulator.
   Stream<String> get output => _output.stream;
 
   /// Connection state for the banner.
-  Stream<ConnectionState> get state => _state.stream;
+  Stream<LinkState> get state => _state.stream;
 
   /// Opens the connection and keeps it open across drops.
   Future<void> connect() async {
@@ -168,7 +168,7 @@ class SessionSocket {
 
   Future<void> _open({required bool first}) async {
     if (_closedByUser) return;
-    _state.add(first ? ConnectionState.connecting : ConnectionState.reconnecting);
+    _state.add(first ? LinkState.connecting : LinkState.reconnecting);
 
     try {
       final ticket = await ticketProvider();
@@ -188,7 +188,7 @@ class SessionSocket {
       // first character after reconnect.
       _decoder = PtyTextDecoder();
       _backoff.reset();
-      _state.add(ConnectionState.connected);
+      _state.add(LinkState.connected);
 
       channel.stream.listen(
         _onMessage,
@@ -217,14 +217,14 @@ class SessionSocket {
         // The session itself ended. Do not reconnect: there is nothing to
         // reconnect to, and retrying would look like a network problem.
         _closedByUser = true;
-        _state.add(ConnectionState.ended);
+        _state.add(LinkState.ended);
         _channel?.sink.close();
     }
   }
 
   void _scheduleReconnect() {
     if (_closedByUser) return;
-    _state.add(ConnectionState.disconnected);
+    _state.add(LinkState.disconnected);
     Timer(_backoff.next(), () => _open(first: false));
   }
 

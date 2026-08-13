@@ -18,4 +18,6 @@ linter:
     - prefer_const_declarations
     - prefer_final_locals
     - avoid_print
-    - require_trailing_commas
+    # require_trailing_commas is deliberately absent: it is a formatter's job,
+    # `dart format` inserts them, and having CI fail on it means real errors
+    # scroll past under a wall of comma advice.

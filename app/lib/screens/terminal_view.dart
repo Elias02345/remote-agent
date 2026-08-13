@@ -28,7 +28,7 @@ class _TerminalScreenState extends State<TerminalScreen> {
   late final SessionSocket _socket;
   final TerminalController _controller = TerminalController();
 
-  ConnectionState _state = ConnectionState.connecting;
+  LinkState _state = LinkState.connecting;
   double _fontSize = CcrType.terminal.fontSize!;
 
   @override
