@@ -17,8 +17,8 @@ the open decisions made during the phase — only then the next phase.
 | 4 | Terminal daemon MVP | done (visual DoD outstanding) |
 | 5 | Files & backups | done |
 | 6 | CloudGate connection | blocked on D-04 |
-| 7 | Security layer | open |
-| 8 | Client app skeleton | open |
+| 7 | Security layer | done (passkey blocked on D-04) |
+| 8 | Client app skeleton | in progress |
 | 9 | Android & polish | open |
 
 ---
@@ -129,7 +129,16 @@ the tunnel.
 
 **Blocker:** D-04 (domain) must be final before this — see `TODO_FOR_USER.md`.
 
-## Phase 7 — Security layer · `open`
+## Phase 7 — Security layer · `done (passkey blocked on D-04)`
+
+**Verified:** every package passes with `-race`. An unauthenticated request to
+`/sessions` or `/files` gets 401 and provably never reaches the handler; a
+device-signed one passes; revoking a device requires a fresh step-up grant;
+`--insecure-no-auth` refuses to start on anything but a loopback address.
+
+**Blocked, and correctly so:** the passkey factor cannot be satisfied while the
+relying-party domain is undecided, so a pairing cannot complete. That is the
+fail-closed behaviour the chain was built for, not a gap to work around.
 
 **Scope:** Password (`Argon2id`) + TOTP + passkey pairing flow, `Ed25519`
 device auth, step-up auth for sensitive actions, rate limiting.
@@ -139,7 +148,7 @@ completing all three factors; an already-paired device gets in without
 re-entering the password; sensitive actions demonstrably trigger a step-up
 prompt.
 
-## Phase 8 — Client app skeleton · `open`
+## Phase 8 — Client app skeleton · `in progress`
 
 **Scope:** Flutter project for Linux/Windows/Web first, session list,
 terminal view with `xterm.dart`, reconnect logic, file browser.

@@ -20,6 +20,23 @@ Legend: 🔴 blocks a phase · 🟡 needed before phase completion · ⚪ nice t
       **A later change invalidates all registered passkeys.**
 - [ ] Domain active in Cloudflare (nameservers pointing to Cloudflare).
 
+### 🔴 Generate the owner credentials (blocks any device pairing)
+The password and TOTP factors are unsatisfiable until these exist — deliberately,
+so a half-configured daemon cannot pair anything. Generate them on the server:
+
+```bash
+claudecode-remoted --setup-owner --owner-email you@example.com
+```
+
+- [ ] Run it, then copy the three `CCR_OWNER_*` lines into
+      `/etc/claudecode-remote/.env`. The password is read from stdin and never
+      taken as a flag, because a flag value is visible to any local user via
+      `ps` and lands in shell history.
+- [ ] Add the printed `otpauth://` URI to your authenticator app. The secret is
+      not shown again.
+- [ ] Note that pairing still cannot **complete** until D-04 (the WebAuthn
+      domain) is decided — the passkey factor has no relying party to bind to.
+
 ### 🔴 Cloudflare API token for CloudGate (blocks Phase 6)
 - [ ] Create a token with `Zone:DNS:Edit` + `Account:Cloudflare Tunnel:Edit`
       rights and store it in the CloudGate web UI. **Not into the repo.**
