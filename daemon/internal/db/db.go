@@ -183,6 +183,108 @@ func (d *DB) TouchSession(id string) error {
 	return nil
 }
 
+// Device mirrors a row of the devices table.
+type Device struct {
+	ID         string `json:"id"`
+	Name       string `json:"name"`
+	Platform   string `json:"platform"`
+	PubKey     string `json:"pubkey"`
+	PairedAt   int64  `json:"paired_at"`
+	LastSeenAt int64  `json:"last_seen_at"`
+	Revoked    bool   `json:"revoked"`
+}
+
+// PairDevice records a device that has completed the full pairing chain.
+//
+// Nothing in this package checks that the chain was actually completed — that
+// is identity.Attempt's job, and it is the only caller allowed to reach here.
+// Keeping the check out of the storage layer avoids two half-enforcements that
+// disagree; see internal/identity/pairing.go.
+func (d *DB) PairDevice(dev Device) error {
+	now := time.Now().Unix()
+	if dev.PairedAt == 0 {
+		dev.PairedAt = now
+	}
+	_, err := d.sql.Exec(
+		`INSERT INTO devices (id, name, platform, pubkey, paired_at, last_seen_at, revoked)
+		 VALUES (?, ?, ?, ?, ?, ?, 0)`,
+		dev.ID, dev.Name, dev.Platform, dev.PubKey, dev.PairedAt, dev.PairedAt,
+	)
+	if err != nil {
+		return fmt.Errorf("pair device %s: %w", dev.ID, err)
+	}
+	return nil
+}
+
+// GetDevice returns one device, revoked or not.
+//
+// Revoked devices are returned rather than hidden: the caller has to be able
+// to tell "revoked" from "never existed" internally, even though it must not
+// expose that difference to a client.
+func (d *DB) GetDevice(id string) (Device, error) {
+	var dev Device
+	var revoked int
+	err := d.sql.QueryRow(
+		`SELECT id, COALESCE(name,''), COALESCE(platform,''), pubkey,
+		        COALESCE(paired_at,0), COALESCE(last_seen_at,0), revoked
+		 FROM devices WHERE id = ?`, id,
+	).Scan(&dev.ID, &dev.Name, &dev.Platform, &dev.PubKey,
+		&dev.PairedAt, &dev.LastSeenAt, &revoked)
+	if err != nil {
+		return Device{}, err
+	}
+	dev.Revoked = revoked != 0
+	return dev, nil
+}
+
+// ListDevices returns every device, including revoked ones, newest first.
+func (d *DB) ListDevices() ([]Device, error) {
+	rows, err := d.sql.Query(
+		`SELECT id, COALESCE(name,''), COALESCE(platform,''), pubkey,
+		        COALESCE(paired_at,0), COALESCE(last_seen_at,0), revoked
+		 FROM devices ORDER BY paired_at DESC`)
+	if err != nil {
+		return nil, fmt.Errorf("list devices: %w", err)
+	}
+	defer rows.Close()
+
+	out := []Device{}
+	for rows.Next() {
+		var dev Device
+		var revoked int
+		if err := rows.Scan(&dev.ID, &dev.Name, &dev.Platform, &dev.PubKey,
+			&dev.PairedAt, &dev.LastSeenAt, &revoked); err != nil {
+			return nil, fmt.Errorf("scan device: %w", err)
+		}
+		dev.Revoked = revoked != 0
+		out = append(out, dev)
+	}
+	return out, rows.Err()
+}
+
+// RevokeDevice marks a device revoked.
+//
+// The row is kept rather than deleted: a deleted device id could be paired
+// again and silently inherit the trust of the revoked one, and the audit
+// trail of "this device existed and was revoked" is worth more than the row.
+func (d *DB) RevokeDevice(id string) error {
+	res, err := d.sql.Exec(`UPDATE devices SET revoked = 1 WHERE id = ?`, id)
+	if err != nil {
+		return fmt.Errorf("revoke device %s: %w", id, err)
+	}
+	return requireOneRow(res, id)
+}
+
+// TouchDevice records that a device authenticated successfully.
+func (d *DB) TouchDevice(id string) error {
+	_, err := d.sql.Exec(`UPDATE devices SET last_seen_at = ? WHERE id = ?`,
+		time.Now().Unix(), id)
+	if err != nil {
+		return fmt.Errorf("touch device %s: %w", id, err)
+	}
+	return nil
+}
+
 func requireOneRow(res sql.Result, id string) error {
 	n, err := res.RowsAffected()
 	if err != nil {
