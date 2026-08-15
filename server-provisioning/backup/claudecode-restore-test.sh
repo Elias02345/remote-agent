@@ -13,7 +13,13 @@ RESTIC_PASSWORD_FILE="${RESTIC_PASSWORD_FILE:-/etc/claudecode-remote/restic-pass
 SCRATCH="${CCR_RESTORE_SCRATCH:-/var/tmp/claudecode-restore-test}"
 NTFY_URL="${NTFY_URL:-}"
 
-export RESTIC_REPOSITORY RESTIC_PASSWORD_FILE
+# Same reason as claudecode-backup.sh: systemd sets neither $HOME nor
+# $XDG_CACHE_HOME for a service without `User=`, and restic refuses to run
+# without a cache directory it can locate.
+RESTIC_CACHE_DIR="${RESTIC_CACHE_DIR:-/var/cache/claudecode-remote/restic}"
+mkdir -p "$RESTIC_CACHE_DIR"
+
+export RESTIC_REPOSITORY RESTIC_PASSWORD_FILE RESTIC_CACHE_DIR
 
 note() { logger -t claudecode-restore-test "$*" 2>/dev/null || true; echo "$*"; }
 

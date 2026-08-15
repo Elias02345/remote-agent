@@ -16,7 +16,18 @@ RETENTION_WEEKLY="${CCR_RETENTION_WEEKLY:-4}"
 RETENTION_MONTHLY="${CCR_RETENTION_MONTHLY:-6}"
 NTFY_URL="${NTFY_URL:-}"
 
-export RESTIC_REPOSITORY RESTIC_PASSWORD_FILE
+# restic needs somewhere to put its cache, and it finds that from $XDG_CACHE_HOME
+# or $HOME. systemd sets neither for a service without `User=`, so under the
+# timer restic dies with "unable to locate cache directory" — while the same
+# script run by hand in a shell works perfectly, because a shell sets HOME.
+# Every hourly backup would have failed on the real server.
+#
+# Setting it explicitly removes the dependency on the environment entirely,
+# rather than papering over it with Environment=HOME=/root in the unit.
+RESTIC_CACHE_DIR="${RESTIC_CACHE_DIR:-/var/cache/claudecode-remote/restic}"
+mkdir -p "$RESTIC_CACHE_DIR"
+
+export RESTIC_REPOSITORY RESTIC_PASSWORD_FILE RESTIC_CACHE_DIR
 
 note() { logger -t claudecode-backup "$*" 2>/dev/null || true; echo "$*"; }
 die()  { note "ERROR: $*"; exit 1; }
