@@ -1,0 +1,51 @@
+[Unit]
+Description=ClaudeCode Remote terminal session daemon
+Documentation=https://github.com/Elias02345/remote-agent/wiki/Terminal-Daemon
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=agent
+Group=agent
+
+# Secrets and per-installation configuration live here, never in this unit and
+# never on the command line: a flag value is visible to every local user in the
+# process table. CCR_PUBLIC_DOMAIN, CCR_OWNER_* and NTFY_URL all come from it.
+# The leading '-' means a missing file is not fatal — the daemon is fail-closed
+# without those values rather than refusing to boot.
+EnvironmentFile=-/etc/claudecode-remote/.env
+
+# The bind address stays loopback. Public reachability is CloudGate's job and it
+# forwards to a local port; the daemon refuses a wildcard bind outright, so this
+# is defence in depth rather than the only guard.
+ExecStart=/usr/local/bin/claudecode-remoted \
+    --addr 127.0.0.1:8080 \
+    --db /var/lib/claudecode-remote/daemon.db \
+    --lock-dir /run/claudecode-locks \
+    --file-roots /srv/exchange \
+    --upload-dir /var/lib/claudecode-remote/uploads \
+    --public-domain ${CCR_PUBLIC_DOMAIN} \
+    --owner-email ${CCR_OWNER_EMAIL} \
+    --owner-password-hash ${CCR_OWNER_PASSWORD_HASH} \
+    --owner-totp-secret ${CCR_OWNER_TOTP_SECRET}
+
+Restart=always
+RestartSec=5
+
+# Modest hardening only. The daemon spawns tmux, writes lock files under /run
+# and user data under /srv, so the aggressive sandboxing options (PrivateTmp,
+# ProtectHome, a strict ReadWritePaths list) would break it in ways that only
+# show up when someone opens a terminal — worse than not setting them.
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+
+# tmux sessions are the point of this service and must survive a restart of it.
+# KillMode=process stops the daemon without taking its process group with it.
+KillMode=process
+
+[Install]
+WantedBy=multi-user.target

@@ -20,9 +20,10 @@ type Manager struct {
 // NewManager wires a Manager and applies the global window-size option.
 func NewManager(database *db.DB, lockMgr *locks.Manager, tmux *Tmux) *Manager {
 	m := &Manager{DB: database, Locks: lockMgr, Tmux: tmux}
-	// Best effort: usually fails only because no tmux server is running yet,
-	// and NewSession sets the option per session anyway.
+	// Best effort: both usually fail only because no tmux server is running
+	// yet, and NewSession re-applies them once one exists.
 	_ = tmux.SetGlobalWindowSize()
+	_ = tmux.EnableTruecolor()
 	return m
 }
 

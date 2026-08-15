@@ -63,6 +63,29 @@ func (t *Tmux) SetGlobalWindowSize() error {
 	return err
 }
 
+// EnableTruecolor tells tmux that attached clients can render 24-bit colour.
+//
+// Without this, tmux quantises truecolor escapes down to the 256-colour
+// palette before they ever reach the client — verified against a live session:
+// `\033[38;2;98;168;232m` arrived as palette index 74 instead of #62A8E8.
+// Section 5.1 lists truecolor as a requirement, so the default is wrong for us.
+//
+// It appends rather than replacing, because tmux ships useful defaults in this
+// option (xterm clipboard support, cursor styles) that a bare `set` would drop.
+// It checks first so repeated calls cannot grow the value without bound.
+//
+// **Capabilities are decided when a client attaches**, so this must run before
+// any `attach-session` — setting it afterwards has no effect on clients that
+// are already connected.
+func (t *Tmux) EnableTruecolor() error {
+	out, err := t.run("show-options", "-g", "terminal-features")
+	if err == nil && strings.Contains(string(out), "RGB") {
+		return nil
+	}
+	_, err = t.run("set-option", "-ags", "terminal-features", ",*:RGB")
+	return err
+}
+
 // HasSession reports whether a tmux session with that name exists.
 func (t *Tmux) HasSession(name string) bool {
 	cmd := exec.Command(t.bin(), "has-session", "-t", name)
@@ -87,6 +110,15 @@ func (t *Tmux) NewSession(name, cwd, shell string) error {
 	// something else entirely.
 	if _, err := t.run("set-option", "-t", name, "window-size", "latest"); err != nil {
 		return err
+	}
+
+	// Creating a session may have started the tmux server, so this is the first
+	// point where the server option can reliably be set — and it has to happen
+	// before the first attach, since client capabilities are fixed at attach
+	// time. Not fatal: losing truecolor degrades to 256 colours, which is worth
+	// a warning but not a failed session.
+	if err := t.EnableTruecolor(); err != nil {
+		return nil //nolint:nilerr // deliberate: see comment above
 	}
 	return nil
 }

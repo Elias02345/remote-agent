@@ -36,7 +36,14 @@ jobs:
             # lib/common.sh is reported as SC1091 and the build fails on a
             # finding that says nothing about the code.
             shellcheck -x "$f" || status=1
-          done < <(find . \( -name .git -o -name .wiki-clone \) -prune -o -type f -print0)
+          # Generated platform folders are pruned: `flutter create` writes a
+          # vendor `gradlew` that trips a dozen style rules we neither own nor
+          # should edit. Linting it would mean either a permanently red job or
+          # blanket suppressions that also hide our own mistakes.
+          done < <(find . \( -name .git -o -name .wiki-clone -o -name build -o -name .dart_tool \
+                          -o -path ./app/android -o -path ./app/ios \
+                          -o -path ./app/linux -o -path ./app/windows -o -path ./app/macos \) \
+                        -prune -o -type f -print0)
           exit "$status"
 
   # ponytail: this job now runs for real. It was originally left out with a

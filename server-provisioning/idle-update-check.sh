@@ -58,7 +58,7 @@ if [[ "$CCR_SKIP_PACKAGE_UPDATES" != "1" ]]; then
     paru -Syu --noconfirm --sudoloop || true
   fi
 
-  for tool in claude-code codex antigravity-cli; do
+  for tool in claude-code codex; do
     npm update -g "$tool" >/dev/null 2>&1 || true
   done
 else

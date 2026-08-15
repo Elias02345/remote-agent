@@ -176,9 +176,15 @@ step_sudoers() {
 
   # Whitelist is exactly the daemon service management the architecture
   # names — nothing wider than that, no ALL=(ALL) ALL.
+  #
+  # Section 2.1 writes the example as `claudecode-daemon`, but the unit this
+  # repo actually installs is `claudecode-remoted.service`, matching the binary
+  # name. A whitelist naming a unit that does not exist grants nothing and
+  # fails silently — the agent user would simply be prompted for a password it
+  # does not have, the first time it tried to restart the daemon.
   {
-    printf '%s ALL=(root) NOPASSWD: /usr/bin/systemctl restart claudecode-daemon\n' "$CCR_AGENT_USER"
-    printf '%s ALL=(root) NOPASSWD: /usr/bin/systemctl status claudecode-daemon\n' "$CCR_AGENT_USER"
+    printf '%s ALL=(root) NOPASSWD: /usr/bin/systemctl restart claudecode-remoted\n' "$CCR_AGENT_USER"
+    printf '%s ALL=(root) NOPASSWD: /usr/bin/systemctl status claudecode-remoted\n' "$CCR_AGENT_USER"
   } > "$tmpfile"
 
   # A broken sudoers file makes the machine unadministrable, so we validate
@@ -337,6 +343,16 @@ print_summary() {
     warn "authenticate. Run 'passwd $CCR_ADMIN_USER' now, BEFORE closing this"
     warn "root session — otherwise $CCR_ADMIN_USER can log in over SSH but"
     warn "cannot administer the machine."
+    warn "=================================================================="
+  fi
+
+  if [[ -z "${CCR_PUBLIC_DOMAIN:-}" ]]; then
+    warn "=================================================================="
+    warn "CCR_PUBLIC_DOMAIN is not set — passkey pairing stays DISABLED."
+    warn "This is fail-closed by design, not a bug: WebAuthn binds every"
+    warn "passkey to this domain, so guessing one is worse than refusing."
+    warn "Set CCR_PUBLIC_DOMAIN in .env (see .env.example) once you have"
+    warn "chosen your domain, before pairing the first device."
     warn "=================================================================="
   fi
 }

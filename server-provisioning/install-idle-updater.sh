@@ -50,7 +50,12 @@ step_aliases() {
 # them. Installed by install-idle-updater.sh; edits here are overwritten.
 alias claude='agent-run claude'
 alias codex='agent-run codex'
-alias antigravity='agent-run antigravity-cli'
+# Architecture Section 4.2 writes this as `agent-run antigravity-cli`, but that
+# command does not exist: Antigravity CLI installs as a single binary named
+# `agy`. Aliasing a nonexistent command would leave every Antigravity run
+# outside the wrapper, and therefore unlocked against system updates.
+alias antigravity='agent-run agy'
+alias agy='agent-run agy'
 EOF
   chmod 0644 /etc/profile.d/claudecode-agents.sh
   ok "Aliases installed for all users via /etc/profile.d"

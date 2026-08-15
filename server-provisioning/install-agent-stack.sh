@@ -31,12 +31,17 @@ fi
 
 CCR_AGENT_USER="${CCR_AGENT_USER:-agent}"
 
-# The Antigravity CLI is deliberately absent from this default. Its npm package
-# name could not be verified when this was written, and guessing one would make
-# every run print a confusing failure for a package that may not exist under
-# that name. Add it to CCR_AGENT_PACKAGES once the install command is known —
-# see TODO_FOR_USER.md.
+# Antigravity is NOT in this list, and cannot be: it is not an npm package at
+# all. It ships as a compiled binary with its own installer, and the command is
+# `agy`, not `antigravity-cli` as architecture Section 4.2's alias assumes.
+# step_antigravity below handles it separately.
 CCR_AGENT_PACKAGES="${CCR_AGENT_PACKAGES:-@anthropic-ai/claude-code @openai/codex}"
+
+# Antigravity's installer is fetched from the vendor over HTTPS. Set to 0 to
+# skip it — see the comment on step_antigravity for why this is worth a
+# conscious choice rather than a silent default.
+CCR_INSTALL_ANTIGRAVITY="${CCR_INSTALL_ANTIGRAVITY:-1}"
+CCR_ANTIGRAVITY_INSTALLER_URL="${CCR_ANTIGRAVITY_INSTALLER_URL:-https://antigravity.google/cli/install.sh}"
 
 id -u "$CCR_AGENT_USER" >/dev/null 2>&1 ||
   fail "User '${CCR_AGENT_USER}' does not exist. Run provision.sh first."
@@ -98,6 +103,48 @@ step_agent_clis() {
   done
 }
 
+step_antigravity() {
+  banner "Installing Antigravity CLI"
+
+  if [[ "$CCR_INSTALL_ANTIGRAVITY" != "1" ]]; then
+    warn "CCR_INSTALL_ANTIGRAVITY=0, skipping Antigravity"
+    PKG_RESULTS+=("SKIP antigravity (disabled)")
+    return 0
+  fi
+
+  if command_exists agy; then
+    ok "Antigravity CLI already installed"
+    PKG_RESULTS+=("OK   antigravity (agy, already present)")
+    return 0
+  fi
+
+  # Downloaded to a file and then executed, rather than piped straight into a
+  # shell. Two reasons: the bytes that were fetched are the bytes that run
+  # (a server can serve different content to `curl | bash` based on read
+  # timing), and the script stays on disk afterwards so an operator can see
+  # what actually ran. It is still vendor code executing as root, which is why
+  # CCR_INSTALL_ANTIGRAVITY exists as an off switch.
+  local installer
+  installer="$(mktemp)"
+  log "Fetching ${CCR_ANTIGRAVITY_INSTALLER_URL}"
+
+  if ! curl -fsSL --max-time 60 "$CCR_ANTIGRAVITY_INSTALLER_URL" -o "$installer"; then
+    rm -f "$installer"
+    warn "Could not fetch the Antigravity installer — continuing without it."
+    PKG_RESULTS+=("FAIL antigravity (download failed)")
+    return 0
+  fi
+
+  if bash "$installer"; then
+    ok "Antigravity CLI installed"
+    PKG_RESULTS+=("OK   antigravity (agy)")
+  else
+    warn "Antigravity installer failed — continuing without it."
+    PKG_RESULTS+=("FAIL antigravity (installer returned non-zero)")
+  fi
+  rm -f "$installer"
+}
+
 step_agentctl() {
   banner "Installing agentctl"
   install -m 0755 "$SCRIPT_DIR/agentctl" /usr/local/bin/agentctl
@@ -146,8 +193,7 @@ print_summary() {
     echo "  ${line}"
   done
 
-  warn "Antigravity CLI is not in the default package list — its install command"
-  warn "could not be verified. Add it to CCR_AGENT_PACKAGES once you know it."
+  log "Antigravity is installed from its own vendor installer, not npm; the command is 'agy'."
   log "Run 'agentctl init' once in every project checkout to link the context files."
 }
 
@@ -155,6 +201,7 @@ print_summary() {
 
 step_node
 step_agent_clis
+step_antigravity
 step_agentctl
 step_global_conventions
 print_summary
