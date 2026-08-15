@@ -79,12 +79,35 @@ func (r *RateLimiter) Allow(ip, account string) error {
 }
 
 // RecordFailure registers one failed attempt against both ip and account.
+//
+// Call this only for evidence that was actually checked against the account —
+// a wrong password, a wrong TOTP code, a failed passkey assertion. For a
+// request that never got that far, use RecordIPFailure: see its doc comment for
+// why the distinction is the difference between a lockout and a denial of
+// service.
 func (r *RateLimiter) RecordFailure(ip, account string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	now := r.nowFunc()
 	recordFailure(r.byIP, ip, now)
 	recordFailure(r.byAcct, account, now)
+}
+
+// RecordIPFailure registers a failure against the IP alone.
+//
+// This exists because the account counter is a weapon pointed at the owner. It
+// is the only account on the system, so "five failures locks the account" means
+// five unauthenticated requests lock the owner out — and if a wrong *email*
+// counts, the attacker does not even need to know which email is right. A
+// public daemon plus a five-strike account lockout is a one-line denial of
+// service against the person who owns the machine.
+//
+// The rule: guesses that were checked against the account count against the
+// account. Everything else costs the IP only.
+func (r *RateLimiter) RecordIPFailure(ip string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	recordFailure(r.byIP, ip, r.nowFunc())
 }
 
 func recordFailure(m map[string]*lockState, key string, now time.Time) {
@@ -120,6 +143,14 @@ func backoff(lockCount int) time.Duration {
 
 // RecordSuccess clears both counters for ip and account. A successful
 // authentication forgives whatever failures led up to it.
+//
+// "A successful authentication" means the whole thing, not one step of it.
+// Calling this after each satisfied pairing factor would make the factors
+// defend each other's counters instead of their own: anyone holding the
+// password could satisfy that factor, wipe the counters, then spend five fresh
+// guesses on the TOTP code, and repeat — unlimited attempts at a six-digit
+// number, with the lockout never firing. Reset once, when the pairing actually
+// completes.
 func (r *RateLimiter) RecordSuccess(ip, account string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()

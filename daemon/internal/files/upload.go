@@ -8,9 +8,11 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 )
 
 // TusVersion is the protocol version this implements (tus.io core plus the
@@ -27,6 +29,31 @@ var ErrOffsetConflict = errors.New("upload offset conflict")
 // what the client declared.
 var ErrChecksumMismatch = errors.New("checksum mismatch")
 
+// ErrMissingChecksum is returned when an upload is created without a usable
+// SHA-256.
+var ErrMissingChecksum = errors.New("a lowercase 64-character sha256 is required in Upload-Metadata")
+
+// ErrTooLarge is returned for an upload that declares more than MaxUploadBytes.
+var ErrTooLarge = errors.New("upload exceeds the maximum permitted size")
+
+// MaxUploadBytes bounds a single upload.
+//
+// Without a bound, Upload-Length is a number the client picks and the daemon
+// reserves disk for — an authenticated device can fill the filesystem, and a
+// full filesystem takes the SQLite database and every terminal with it. 16 GiB
+// is far past any real transfer over this API and still leaves a normal server
+// disk with room.
+//
+// ponytail: one global constant, not a per-device quota. Add per-device
+// accounting if this ever has more than the handful of devices one owner pairs.
+const MaxUploadBytes = 16 << 30
+
+// UploadTTL is how long an untouched partial upload is kept before the next
+// Create sweeps it away. Resumable means "survives a dropped connection and a
+// daemon restart", not "occupies disk forever": without this, every abandoned
+// upload is permanent, and abandoning uploads costs the client nothing.
+const UploadTTL = 24 * time.Hour
+
 // uploadState is persisted next to the partial file so an upload survives a
 // daemon restart — otherwise "resumable" would only mean "resumable until the
 // service blinks".
@@ -42,7 +69,13 @@ type Uploader struct {
 	store *Store
 	dir   string
 
-	mu sync.Mutex
+	// mu guards dir bookkeeping and the locks map only. It is explicitly NOT
+	// held while a chunk streams: one global mutex around the body copy meant a
+	// single slow client blocked every other upload for as long as it cared to
+	// dribble bytes — an unauthenticated-looking outage produced by one
+	// authenticated device on a bad connection.
+	mu    sync.Mutex
+	locks map[string]*sync.Mutex
 }
 
 // NewUploader stores partial uploads in dir.
@@ -50,8 +83,55 @@ func NewUploader(store *Store, dir string) (*Uploader, error) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, fmt.Errorf("create upload directory %s: %w", dir, err)
 	}
-	return &Uploader{store: store, dir: dir}, nil
+	return &Uploader{store: store, dir: dir, locks: map[string]*sync.Mutex{}}, nil
 }
+
+// lockFor returns the mutex serialising writes to one upload. Concurrent
+// PATCHes to the *same* upload still have to take turns — they share a file
+// offset — but two different uploads no longer wait on each other.
+func (u *Uploader) lockFor(id string) *sync.Mutex {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	m, ok := u.locks[id]
+	if !ok {
+		m = &sync.Mutex{}
+		u.locks[id] = m
+	}
+	return m
+}
+
+func (u *Uploader) forgetLock(id string) {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	delete(u.locks, id)
+}
+
+// sweepExpired removes partial uploads whose state file has not been touched
+// within UploadTTL. Called from Create, so the cost is paid by whoever is
+// starting new uploads rather than by a background goroutine.
+func (u *Uploader) sweepExpired() {
+	entries, err := os.ReadDir(u.dir)
+	if err != nil {
+		return
+	}
+	cutoff := time.Now().Add(-UploadTTL)
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
+			continue
+		}
+		info, err := e.Info()
+		if err != nil || info.ModTime().After(cutoff) {
+			continue
+		}
+		id := strings.TrimSuffix(e.Name(), ".json")
+		os.Remove(u.partPath(id))
+		os.Remove(u.statePath(id))
+		u.forgetLock(id)
+	}
+}
+
+// sha256Hex matches exactly what HashFile produces: 64 lowercase hex digits.
+var sha256Hex = regexp.MustCompile(`^[0-9a-f]{64}$`)
 
 func (u *Uploader) partPath(id string) string  { return filepath.Join(u.dir, id+".part") }
 func (u *Uploader) statePath(id string) string { return filepath.Join(u.dir, id+".json") }
@@ -63,6 +143,19 @@ func (u *Uploader) Create(id, target string, length int64, expectedHash string) 
 	if length < 0 {
 		return errors.New("upload length must not be negative")
 	}
+	if length > MaxUploadBytes {
+		return ErrTooLarge
+	}
+	// CLAUDE.md point 6 and Section 8.2 make SHA-256 verification part of the
+	// contract, not an optimisation: verify before sending AND after receiving.
+	// Accepting an upload without a hash quietly opted out of both halves — the
+	// server had nothing to compare against, so Finish's check was skipped and
+	// the file landed unverified. A required field that is only sometimes
+	// required is not a required field.
+	expectedHash = strings.ToLower(strings.TrimSpace(expectedHash))
+	if !sha256Hex.MatchString(expectedHash) {
+		return ErrMissingChecksum
+	}
 	// Validate the destination before a single byte is accepted. Discovering
 	// at completion time that the target was outside the roots would mean
 	// having buffered an arbitrary amount of attacker-chosen data first.
@@ -73,6 +166,8 @@ func (u *Uploader) Create(id, target string, length int64, expectedHash string) 
 		return errors.New("invalid upload id")
 	}
 
+	u.sweepExpired()
+
 	u.mu.Lock()
 	defer u.mu.Unlock()
 
@@ -82,7 +177,7 @@ func (u *Uploader) Create(id, target string, length int64, expectedHash string) 
 	}
 	f.Close()
 
-	state := uploadState{ID: id, Target: target, Length: length, Expected: strings.ToLower(expectedHash)}
+	state := uploadState{ID: id, Target: target, Length: length, Expected: expectedHash}
 	blob, err := json.Marshal(state)
 	if err != nil {
 		return fmt.Errorf("marshal upload state: %w", err)
@@ -126,8 +221,9 @@ func (u *Uploader) Offset(id string) (int64, int64, error) {
 // WriteChunk appends a chunk at offset. It returns the new offset and whether
 // the upload is now complete.
 func (u *Uploader) WriteChunk(id string, offset int64, r io.Reader) (int64, bool, error) {
-	u.mu.Lock()
-	defer u.mu.Unlock()
+	lock := u.lockFor(id)
+	lock.Lock()
+	defer lock.Unlock()
 
 	st, err := u.loadState(id)
 	if err != nil {
@@ -153,14 +249,28 @@ func (u *Uploader) WriteChunk(id string, offset int64, r io.Reader) (int64, bool
 	if _, err := f.Seek(offset, io.SeekStart); err != nil {
 		return offset, false, fmt.Errorf("seek in partial file for %s: %w", id, err)
 	}
-	written, err := io.Copy(f, r)
+
+	// Bounded by what the upload has left, so an over-long body is refused at
+	// the byte that would exceed the declaration rather than after it has all
+	// been written to disk. Checking the size afterwards, as this used to,
+	// meant a client that declared one kilobyte could still stream a terabyte
+	// through and only then be told no.
+	remaining := st.Length - offset
+	if remaining < 0 {
+		remaining = 0
+	}
+	limited := io.LimitReader(r, remaining+1)
+	written, err := io.Copy(f, limited)
 	if err != nil {
 		return offset + written, false, fmt.Errorf("write chunk for %s: %w", id, err)
 	}
 	newOffset := offset + written
 
 	if newOffset > st.Length {
-		return newOffset, false, fmt.Errorf("upload %s exceeded its declared length", id)
+		// Truncate back to the declared length so the partial file cannot be
+		// left holding the one over-limit byte we accepted to detect this.
+		_ = f.Truncate(st.Length)
+		return st.Length, false, fmt.Errorf("upload %s exceeded its declared length", id)
 	}
 	return newOffset, newOffset == st.Length, nil
 }
@@ -173,8 +283,10 @@ func (u *Uploader) WriteChunk(id string, offset int64, r io.Reader) (int64, bool
 // upload, because nothing downstream will ever question it. The computed hash
 // is returned either way so the client can compare a second time.
 func (u *Uploader) Finish(id string) (string, error) {
-	u.mu.Lock()
-	defer u.mu.Unlock()
+	lock := u.lockFor(id)
+	lock.Lock()
+	defer lock.Unlock()
+	defer u.forgetLock(id)
 
 	st, err := u.loadState(id)
 	if err != nil {
@@ -186,7 +298,10 @@ func (u *Uploader) Finish(id string) (string, error) {
 		return "", err
 	}
 
-	if st.Expected != "" && !strings.EqualFold(sum, st.Expected) {
+	// No `st.Expected != ""` escape hatch: Create refuses an upload without a
+	// well-formed hash, so by the time anything reaches here there is always
+	// something to compare against.
+	if !strings.EqualFold(sum, st.Expected) {
 		u.discard(id)
 		return sum, ErrChecksumMismatch
 	}
@@ -218,9 +333,11 @@ func (u *Uploader) discard(id string) {
 
 // Discard abandons an upload.
 func (u *Uploader) Discard(id string) {
-	u.mu.Lock()
-	defer u.mu.Unlock()
+	lock := u.lockFor(id)
+	lock.Lock()
 	u.discard(id)
+	lock.Unlock()
+	u.forgetLock(id)
 }
 
 func copyFile(src, dst string) error {

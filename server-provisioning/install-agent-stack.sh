@@ -15,21 +15,11 @@ require_root
 
 # --- configuration -----------------------------------------------------------
 
-# Same loader as provision.sh: a .env file is a convenience, never a way to
-# silently shadow an explicit CCR_FOO=bar ./install-agent-stack.sh.
-if [[ -f "$SCRIPT_DIR/.env" ]]; then
-  while IFS='=' read -r ccr_key ccr_value; do
-    [[ "$ccr_key" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || continue
-    if [[ "$ccr_value" == '"'*'"' || "$ccr_value" == "'"*"'" ]]; then
-      ccr_value="${ccr_value:1:${#ccr_value}-2}"
-    fi
-    if [[ -z "${!ccr_key+x}" ]]; then
-      export "${ccr_key}=${ccr_value}"
-    fi
-  done < <(grep -vE '^[[:space:]]*(#|$)' "$SCRIPT_DIR/.env")
-fi
+# Same ownership-checked, CCR_*-only loader as provision.sh (lib/common.sh).
+load_env_file "$SCRIPT_DIR/.env"
 
 CCR_AGENT_USER="${CCR_AGENT_USER:-agent}"
+require_valid_name CCR_AGENT_USER "$CCR_AGENT_USER"
 
 # Antigravity is NOT in this list, and cannot be: it is not an npm package at
 # all. It ships as a compiled binary with its own installer, and the command is
@@ -37,11 +27,20 @@ CCR_AGENT_USER="${CCR_AGENT_USER:-agent}"
 # step_antigravity below handles it separately.
 CCR_AGENT_PACKAGES="${CCR_AGENT_PACKAGES:-@anthropic-ai/claude-code @openai/codex}"
 
-# Antigravity's installer is fetched from the vendor over HTTPS. Set to 0 to
-# skip it — see the comment on step_antigravity for why this is worth a
-# conscious choice rather than a silent default.
-CCR_INSTALL_ANTIGRAVITY="${CCR_INSTALL_ANTIGRAVITY:-1}"
+# Antigravity's installer is fetched from the vendor over HTTPS and executed as
+# root. Default OFF: "download a mutable URL and run it as root" is the single
+# most privileged thing this whole repo does, and it should be a decision the
+# operator makes on purpose, not something that happens because they ran the
+# stack installer. Set CCR_INSTALL_ANTIGRAVITY=1 to opt in.
+#
+# CCR_ANTIGRAVITY_INSTALLER_SHA256 pins the script: when set, the downloaded
+# bytes must match or nothing is executed. The vendor publishes no signature and
+# no versioned URL, so this is the only pin available — but it is a real one,
+# and it turns "whatever is at that URL today" into "the bytes the operator
+# reviewed".
+CCR_INSTALL_ANTIGRAVITY="${CCR_INSTALL_ANTIGRAVITY:-0}"
 CCR_ANTIGRAVITY_INSTALLER_URL="${CCR_ANTIGRAVITY_INSTALLER_URL:-https://antigravity.google/cli/install.sh}"
+CCR_ANTIGRAVITY_INSTALLER_SHA256="${CCR_ANTIGRAVITY_INSTALLER_SHA256:-}"
 
 id -u "$CCR_AGENT_USER" >/dev/null 2>&1 ||
   fail "User '${CCR_AGENT_USER}' does not exist. Run provision.sh first."
@@ -107,8 +106,11 @@ step_antigravity() {
   banner "Installing Antigravity CLI"
 
   if [[ "$CCR_INSTALL_ANTIGRAVITY" != "1" ]]; then
-    warn "CCR_INSTALL_ANTIGRAVITY=0, skipping Antigravity"
-    PKG_RESULTS+=("SKIP antigravity (disabled)")
+    log "Antigravity is not installed (CCR_INSTALL_ANTIGRAVITY is not 1)."
+    log "It installs by downloading a vendor script and running it as root."
+    log "Set CCR_INSTALL_ANTIGRAVITY=1 — ideally with CCR_ANTIGRAVITY_INSTALLER_SHA256"
+    log "pinned to bytes you have read — if you want it."
+    PKG_RESULTS+=("SKIP antigravity (not opted in)")
     return 0
   fi
 
@@ -133,6 +135,18 @@ step_antigravity() {
     warn "Could not fetch the Antigravity installer — continuing without it."
     PKG_RESULTS+=("FAIL antigravity (download failed)")
     return 0
+  fi
+
+  if [[ -n "$CCR_ANTIGRAVITY_INSTALLER_SHA256" ]]; then
+    local actual
+    actual="$(sha256sum "$installer" | cut -d' ' -f1)"
+    if [[ "$actual" != "$CCR_ANTIGRAVITY_INSTALLER_SHA256" ]]; then
+      rm -f "$installer"
+      fail "Antigravity installer checksum mismatch: expected ${CCR_ANTIGRAVITY_INSTALLER_SHA256}, got ${actual}. Nothing was executed."
+    fi
+    ok "Antigravity installer matches the pinned SHA-256"
+  else
+    warn "CCR_ANTIGRAVITY_INSTALLER_SHA256 is unset — running unverified vendor code as root."
   fi
 
   if bash "$installer"; then

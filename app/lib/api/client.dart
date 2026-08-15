@@ -6,6 +6,7 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 
 import '../models/session.dart';
+import 'device_identity.dart';
 
 /// Thrown when the daemon answers with a non-success status.
 class ApiException implements Exception {
@@ -87,9 +88,16 @@ class ApiClient {
   }
 
   /// Obtains a short-lived single-use ticket for a WebSocket handshake.
+  ///
+  /// [sessionId] is not part of the request: the daemon's ticket is not
+  /// scoped to a session (`wsTicketStore` in `cmd/claudecode-remoted/main.go`
+  /// hands out a generic single-use ticket, and `wrapSessionAuth` accepts it
+  /// for any `/sessions/{id}/stream` path). The parameter stays so call
+  /// sites read the same either way and a future daemon that does scope
+  /// tickets per-session would not need every caller rewritten.
   Future<String> streamTicket(String sessionId) async {
     final res = await _http.post(
-      baseUri.replace(path: '/sessions/$sessionId/ticket'),
+      baseUri.replace(path: '/auth/ws-ticket'),
       headers: await _headers(),
     );
     _ensureOk(res);
@@ -111,4 +119,47 @@ class ApiClient {
   }
 
   void close() => _http.close();
+}
+
+/// Builds the [ApiClient.authHeaders] (and [TusUploader.authHeaders])
+/// callback: fetch a fresh challenge, sign it with the device key, attach it.
+///
+/// A challenge is single-use (architecture Section 5.4), so this cannot
+/// cache a signature and reuse it — every call fetches its own challenge and
+/// signs that one. This is a free function rather than a method on
+/// [DeviceIdentity] because it needs an HTTP round trip to `/auth/challenge`,
+/// which must go out **unsigned** — looping it back through this same
+/// callback would try to sign a challenge to fetch a challenge.
+Future<Map<String, String>> Function() deviceAuthHeaders({
+  required Uri baseUri,
+  required DeviceIdentity identity,
+  http.Client? httpClient,
+}) {
+  final client = httpClient ?? http.Client();
+  return () async {
+    final deviceId = await identity.deviceId();
+    if (deviceId == null) {
+      throw const ApiException(401, 'device is not paired yet');
+    }
+
+    final res = await client.post(
+      baseUri.replace(path: '/auth/challenge'),
+      headers: const {'Content-Type': 'application/json'},
+      body: jsonEncode({'device_id': deviceId}),
+    );
+    if (res.statusCode != 200) {
+      throw ApiException(res.statusCode, 'could not obtain a challenge');
+    }
+    final body = jsonDecode(res.body);
+    if (body is! Map || body['challenge'] is! String) {
+      throw const ApiException(500, 'daemon returned no challenge');
+    }
+
+    final challenge = base64Decode(body['challenge'] as String);
+    final signature = await identity.sign(challenge);
+    return {
+      'X-Device-Id': deviceId,
+      'X-Device-Signature': base64Encode(signature),
+    };
+  };
 }

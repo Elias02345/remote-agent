@@ -39,9 +39,31 @@ func (t *Tmux) bin() string {
 	return t.Bin
 }
 
+// childEnv is the environment handed to every tmux process.
+//
+// Deliberately built from an allowlist rather than from os.Environ(). The
+// daemon's own environment holds the owner's Argon2id password hash and the raw
+// TOTP secret, and `tmux new-session` is how a coding agent's shell gets
+// created: pass the daemon's environment through and the first tmux invocation
+// starts a tmux *server* that keeps it, so every terminal opened afterwards —
+// and every agent running in one — can read the second factor out of its own
+// environment. The seed for a TOTP is the TOTP.
+//
+// A terminal needs almost nothing from us: tmux and the shell find the rest for
+// themselves from /etc/passwd and the system profile.
+func childEnv() []string {
+	env := []string{"TERM=" + Term}
+	for _, key := range []string{"PATH", "HOME", "USER", "LOGNAME", "SHELL", "LANG", "TZ"} {
+		if v, ok := os.LookupEnv(key); ok {
+			env = append(env, key+"="+v)
+		}
+	}
+	return env
+}
+
 func (t *Tmux) run(args ...string) ([]byte, error) {
 	cmd := exec.Command(t.bin(), args...)
-	cmd.Env = append(os.Environ(), "TERM="+Term)
+	cmd.Env = childEnv()
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return out, fmt.Errorf("tmux %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(string(out)))
@@ -132,7 +154,7 @@ func (t *Tmux) NewSession(name, cwd, shell string) error {
 // client would render a flat, colourless snapshot.
 func (t *Tmux) CapturePane(name string) ([]byte, error) {
 	cmd := exec.Command(t.bin(), "capture-pane", "-p", "-e", "-t", name)
-	cmd.Env = append(os.Environ(), "TERM="+Term)
+	cmd.Env = childEnv()
 	out, err := cmd.Output()
 	if err != nil {
 		return nil, fmt.Errorf("capture-pane for %s: %w", name, err)
@@ -163,7 +185,7 @@ func (t *Tmux) Attach(name string, cols, rows uint16) (*Attachment, error) {
 	}
 
 	cmd := exec.Command(t.bin(), "attach-session", "-t", name)
-	cmd.Env = append(os.Environ(), "TERM="+Term)
+	cmd.Env = childEnv()
 
 	f, err := pty.StartWithSize(cmd, &pty.Winsize{Cols: cols, Rows: rows})
 	if err != nil {

@@ -135,7 +135,7 @@ func TestWrongOffsetIsRefused(t *testing.T) {
 
 func TestUploadExceedingDeclaredLengthFails(t *testing.T) {
 	u, _ := newUploader(t)
-	if err := u.Create("up4", "y.txt", 4, ""); err != nil {
+	if err := u.Create("up4", "y.txt", 4, sha256hex([]byte("abcd"))); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
 	if _, _, err := u.WriteChunk("up4", 0, bytes.NewReader([]byte("far too long"))); err == nil {
@@ -147,7 +147,7 @@ func TestUploadExceedingDeclaredLengthFails(t *testing.T) {
 // attacker-chosen amount of data would be buffered before the refusal.
 func TestCreateRejectsTargetOutsideRoots(t *testing.T) {
 	u, _ := newUploader(t)
-	if err := u.Create("up5", "../../etc/cron.d/evil", 10, ""); err == nil {
+	if err := u.Create("up5", "../../etc/cron.d/evil", 10, sha256hex([]byte("x"))); err == nil {
 		t.Fatal("expected a target outside the roots to be refused at creation")
 	}
 	if _, err := os.Stat(u.partPath("up5")); !os.IsNotExist(err) {
@@ -161,31 +161,65 @@ func TestInvalidUploadIDsRejected(t *testing.T) {
 	u, _ := newUploader(t)
 	bad := []string{"", "../escape", "a/b", "with space", strings.Repeat("x", 65)}
 	for _, id := range bad {
-		if err := u.Create(id, "ok.txt", 1, ""); err == nil {
+		if err := u.Create(id, "ok.txt", 1, sha256hex([]byte("x"))); err == nil {
 			t.Errorf("Create with id %q was accepted", id)
 		}
 	}
 }
 
-func TestEmptyExpectedHashSkipsVerification(t *testing.T) {
+// CLAUDE.md point 6 makes SHA-256 verification part of the contract on both
+// sides. An upload that declares no hash used to be accepted and then skipped
+// the comparison entirely — the file landed unverified while the API still
+// reported success, which is the failure mode the double check exists to
+// prevent. Creation has to refuse it.
+func TestCreateRequiresAWellFormedSHA256(t *testing.T) {
 	u, root := newUploader(t)
-	payload := []byte("no hash declared")
 
-	if err := u.Create("up6", "nohash.txt", int64(len(payload)), ""); err != nil {
-		t.Fatalf("Create: %v", err)
+	bad := map[string]string{
+		"empty":       "",
+		"too short":   "abc123",
+		"not hex":     strings.Repeat("z", 64),
+		"uppercase":   strings.ToUpper(sha256hex([]byte("x"))),
+		"with spaces": "  " + sha256hex([]byte("x")) + "  ",
 	}
-	if _, _, err := u.WriteChunk("up6", 0, bytes.NewReader(payload)); err != nil {
-		t.Fatalf("WriteChunk: %v", err)
+	for name, hash := range bad {
+		err := u.Create("up6", "nohash.txt", 4, hash)
+		switch name {
+		case "uppercase", "with spaces":
+			// Normalised, not rejected: these are the same hash written
+			// differently, and refusing them would be pedantry rather than
+			// safety.
+			if err != nil {
+				t.Errorf("Create with a %s hash = %v, want it normalised and accepted", name, err)
+			}
+			u.Discard("up6")
+		default:
+			if !errors.Is(err, ErrMissingChecksum) {
+				t.Errorf("Create with a %s hash = %v, want ErrMissingChecksum", name, err)
+			}
+			if _, statErr := os.Stat(u.partPath("up6")); !os.IsNotExist(statErr) {
+				t.Errorf("a partial file was created for a %s hash", name)
+				u.Discard("up6")
+			}
+		}
 	}
-	sum, err := u.Finish("up6")
-	if err != nil {
-		t.Fatalf("Finish: %v", err)
+
+	if _, err := os.Stat(filepath.Join(root, "nohash.txt")); !os.IsNotExist(err) {
+		t.Error("an unverified file reached the store")
 	}
-	if sum != sha256hex(payload) {
-		t.Errorf("server hash = %s, want %s", sum, sha256hex(payload))
+}
+
+// Upload-Length is a number the client picks, and the daemon reserves disk for
+// it. Unbounded, one request fills the filesystem — which takes the database
+// and every open terminal with it.
+func TestCreateRejectsAnAbsurdDeclaredLength(t *testing.T) {
+	u, _ := newUploader(t)
+	err := u.Create("up7", "huge.bin", MaxUploadBytes+1, sha256hex([]byte("x")))
+	if !errors.Is(err, ErrTooLarge) {
+		t.Fatalf("Create with an over-limit length = %v, want ErrTooLarge", err)
 	}
-	if _, err := os.Stat(filepath.Join(root, "nohash.txt")); err != nil {
-		t.Errorf("file not in place: %v", err)
+	if _, statErr := os.Stat(u.partPath("up7")); !os.IsNotExist(statErr) {
+		t.Error("a partial file was created for a rejected length")
 	}
 }
 

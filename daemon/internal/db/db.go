@@ -8,7 +8,9 @@
 package db
 
 import (
+	"crypto/rand"
 	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 
@@ -38,6 +40,25 @@ CREATE TABLE IF NOT EXISTS devices (
     paired_at INTEGER,
     last_seen_at INTEGER,
     revoked INTEGER DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS owner_identity (
+    id INTEGER PRIMARY KEY CHECK(id = 1),
+    user_handle BLOB NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS webauthn_credentials (
+    id TEXT PRIMARY KEY,
+    name TEXT,
+    public_key BLOB NOT NULL,
+    attestation_type TEXT,
+    aaguid BLOB,
+    sign_count INTEGER DEFAULT 0,
+    backup_eligible INTEGER DEFAULT 0,
+    backup_state INTEGER DEFAULT 0,
+    transports TEXT,
+    created_at INTEGER,
+    last_used_at INTEGER
 );
 `
 
@@ -292,6 +313,148 @@ func requireOneRow(res sql.Result, id string) error {
 	}
 	if n == 0 {
 		return sql.ErrNoRows
+	}
+	return nil
+}
+
+// WebAuthnCredential mirrors a row of the webauthn_credentials table. It
+// deliberately uses only primitive types (no go-webauthn types) so this
+// package never has to import the WebAuthn library — the identity package's
+// Store (internal/identity/store.go) is where the conversion to and from
+// webauthn.Credential happens, the same split that already exists for
+// Device/DeviceInfo above.
+type WebAuthnCredential struct {
+	ID              string `json:"id"`
+	Name            string `json:"name"`
+	PublicKey       []byte `json:"public_key"`
+	AttestationType string `json:"attestation_type"`
+	AAGUID          []byte `json:"aaguid"`
+	SignCount       uint32 `json:"sign_count"`
+	BackupEligible  bool   `json:"backup_eligible"`
+	BackupState     bool   `json:"backup_state"`
+	Transports      string `json:"transports"` // comma separated
+	CreatedAt       int64  `json:"created_at"`
+	LastUsedAt      int64  `json:"last_used_at"`
+}
+
+func boolToInt(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
+}
+
+// OwnerUserHandle returns the WebAuthn user handle for the single owner
+// account, generating and persisting a fresh random one on first call.
+//
+// This is never the owner's email — see identity.newOwnerWebAuthnUser's doc
+// comment for why — and it must stay stable across every ceremony run
+// against it: WebAuthn requires the handle to identify the same "user" every
+// time, so a new one per call would make every already-registered passkey
+// belong to a different user as far as the authenticator is concerned.
+//
+// INSERT OR IGNORE handles two callers racing to bootstrap the handle at
+// once: only one insert wins, and the loser reads back the winner's row
+// rather than believing its own unused random bytes are now the handle in
+// use.
+func (d *DB) OwnerUserHandle() ([]byte, error) {
+	var handle []byte
+	err := d.sql.QueryRow(`SELECT user_handle FROM owner_identity WHERE id = 1`).Scan(&handle)
+	if err == nil {
+		return handle, nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return nil, fmt.Errorf("read owner user handle: %w", err)
+	}
+
+	handle = make([]byte, 32)
+	if _, err := rand.Read(handle); err != nil {
+		return nil, fmt.Errorf("generate owner user handle: %w", err)
+	}
+	if _, err := d.sql.Exec(`INSERT OR IGNORE INTO owner_identity (id, user_handle) VALUES (1, ?)`, handle); err != nil {
+		return nil, fmt.Errorf("store owner user handle: %w", err)
+	}
+	if err := d.sql.QueryRow(`SELECT user_handle FROM owner_identity WHERE id = 1`).Scan(&handle); err != nil {
+		return nil, fmt.Errorf("read owner user handle after insert: %w", err)
+	}
+	return handle, nil
+}
+
+// AddWebAuthnCredential persists a newly registered passkey.
+func (d *DB) AddWebAuthnCredential(c WebAuthnCredential) error {
+	now := time.Now().Unix()
+	if c.CreatedAt == 0 {
+		c.CreatedAt = now
+	}
+	_, err := d.sql.Exec(
+		`INSERT INTO webauthn_credentials
+		    (id, name, public_key, attestation_type, aaguid, sign_count, backup_eligible, backup_state, transports, created_at, last_used_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		c.ID, c.Name, c.PublicKey, c.AttestationType, c.AAGUID, c.SignCount,
+		boolToInt(c.BackupEligible), boolToInt(c.BackupState), c.Transports, c.CreatedAt, c.CreatedAt,
+	)
+	if err != nil {
+		return fmt.Errorf("add webauthn credential %s: %w", c.ID, err)
+	}
+	return nil
+}
+
+// ListWebAuthnCredentials returns every registered passkey, oldest first.
+func (d *DB) ListWebAuthnCredentials() ([]WebAuthnCredential, error) {
+	rows, err := d.sql.Query(
+		`SELECT id, COALESCE(name,''), public_key, COALESCE(attestation_type,''), aaguid,
+		        COALESCE(sign_count,0), COALESCE(backup_eligible,0), COALESCE(backup_state,0),
+		        COALESCE(transports,''), COALESCE(created_at,0), COALESCE(last_used_at,0)
+		 FROM webauthn_credentials ORDER BY created_at ASC`)
+	if err != nil {
+		return nil, fmt.Errorf("list webauthn credentials: %w", err)
+	}
+	defer rows.Close()
+
+	out := []WebAuthnCredential{}
+	for rows.Next() {
+		var c WebAuthnCredential
+		var backupEligible, backupState int
+		if err := rows.Scan(&c.ID, &c.Name, &c.PublicKey, &c.AttestationType, &c.AAGUID,
+			&c.SignCount, &backupEligible, &backupState, &c.Transports, &c.CreatedAt, &c.LastUsedAt); err != nil {
+			return nil, fmt.Errorf("scan webauthn credential: %w", err)
+		}
+		c.BackupEligible = backupEligible != 0
+		c.BackupState = backupState != 0
+		out = append(out, c)
+	}
+	return out, rows.Err()
+}
+
+// CountWebAuthnCredentials reports how many passkeys are registered. This is
+// the single source of truth identity.Owner uses to decide whether the
+// unauthenticated bootstrap registration window is still open — read fresh
+// on every call, never cached, by design (see passkey_http.go).
+func (d *DB) CountWebAuthnCredentials() (int, error) {
+	var n int
+	if err := d.sql.QueryRow(`SELECT COUNT(*) FROM webauthn_credentials`).Scan(&n); err != nil {
+		return 0, fmt.Errorf("count webauthn credentials: %w", err)
+	}
+	return n, nil
+}
+
+// UpdateWebAuthnSignCount persists a credential's updated sign counter after
+// a successful assertion.
+func (d *DB) UpdateWebAuthnSignCount(id string, count uint32) error {
+	res, err := d.sql.Exec(`UPDATE webauthn_credentials SET sign_count = ? WHERE id = ?`, count, id)
+	if err != nil {
+		return fmt.Errorf("update sign count for credential %s: %w", id, err)
+	}
+	return requireOneRow(res, id)
+}
+
+// TouchWebAuthnCredential records that a passkey just authenticated
+// successfully — the WebAuthn equivalent of TouchDevice above.
+func (d *DB) TouchWebAuthnCredential(id string) error {
+	_, err := d.sql.Exec(`UPDATE webauthn_credentials SET last_used_at = ? WHERE id = ?`,
+		time.Now().Unix(), id)
+	if err != nil {
+		return fmt.Errorf("touch webauthn credential %s: %w", id, err)
 	}
 	return nil
 }

@@ -59,7 +59,29 @@ class _TerminalScreenState extends State<TerminalScreen> {
     // immediately redraw it — a visible flash for no gain.
     _socket.connect();
 
-    _terminal.onOutput = _socket.sendInput;
+    _terminal.onOutput = _handleInput;
+  }
+
+  /// Keystrokes go out only while the socket is live.
+  ///
+  /// [SessionSocket.sendInput] reports whether it could send, and that answer
+  /// has to reach the user: typing into a terminal that is reconnecting used to
+  /// write to a dead sink, so the characters vanished with no echo, no error
+  /// and no way to tell they had never left the device. The connection banner
+  /// already says "reconnecting" — this makes the dropped input say so too,
+  /// rather than leaving the user to infer it from a terminal that stopped
+  /// responding.
+  void _handleInput(String data) {
+    if (_socket.sendInput(data)) return;
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
+      ..removeCurrentSnackBar()
+      ..showSnackBar(
+        const SnackBar(
+          content: Text('Not connected — that input was not sent.'),
+          duration: Duration(seconds: 2),
+        ),
+      );
   }
 
   @override

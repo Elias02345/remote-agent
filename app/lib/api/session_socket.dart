@@ -133,6 +133,23 @@ class SessionSocket {
   PtyTextDecoder _decoder = PtyTextDecoder();
   bool _closedByUser = false;
 
+  /// Incremented on every connect attempt and on dispose.
+  ///
+  /// `_closedByUser` alone was not enough. Opening a connection has two awaits
+  /// in it — fetching the ticket, then `channel.ready` — and the flag was only
+  /// checked before the first. A user leaving the screen during either one left
+  /// the late connection to be stored in `_channel` and its listener to push
+  /// into controllers that dispose had already closed. Re-reading a generation
+  /// counter after every await is what makes "this attempt is stale" a
+  /// question the code can actually ask.
+  int _generation = 0;
+
+  /// True while a live socket is attached. Without this, [sendInput] wrote to
+  /// whatever sink was last stored — including a closed one during a reconnect,
+  /// which swallowed the user's keystrokes with no error and no sign anything
+  /// had been lost.
+  bool _connected = false;
+
   final _output = StreamController<String>.broadcast();
   final _state = StreamController<LinkState>.broadcast();
 
@@ -150,10 +167,13 @@ class SessionSocket {
 
   Future<void> _open({required bool first}) async {
     if (_closedByUser) return;
+    final generation = ++_generation;
     _state.add(first ? LinkState.connecting : LinkState.reconnecting);
 
     try {
       final ticket = await ticketProvider();
+      if (generation != _generation || _closedByUser) return;
+
       final scheme = baseUri.scheme == 'https' ? 'wss' : 'ws';
       final uri = baseUri.replace(
         scheme: scheme,
@@ -164,7 +184,17 @@ class SessionSocket {
       final channel = WebSocketChannel.connect(uri);
       await channel.ready;
 
+      // Re-check after the second await too. A socket that became ready after
+      // the screen was disposed has to be closed here, not stored — otherwise
+      // it stays open on the server and its listener emits into a closed
+      // controller.
+      if (generation != _generation || _closedByUser) {
+        unawaited(channel.sink.close());
+        return;
+      }
+
       _channel = channel;
+      _connected = true;
       // A fresh decoder per connection: a partial character from before the
       // drop can never be completed, and carrying it over would corrupt the
       // first character after reconnect.
@@ -174,12 +204,12 @@ class SessionSocket {
 
       channel.stream.listen(
         _onMessage,
-        onDone: _scheduleReconnect,
-        onError: (Object _) => _scheduleReconnect(),
+        onDone: () => _scheduleReconnect(generation),
+        onError: (Object _) => _scheduleReconnect(generation),
         cancelOnError: true,
       );
     } on Object {
-      _scheduleReconnect();
+      _scheduleReconnect(generation);
     }
   }
 
@@ -199,23 +229,46 @@ class SessionSocket {
         // The session itself ended. Do not reconnect: there is nothing to
         // reconnect to, and retrying would look like a network problem.
         _closedByUser = true;
+        _connected = false;
         _state.add(LinkState.ended);
         _channel?.sink.close();
     }
   }
 
-  void _scheduleReconnect() {
-    if (_closedByUser) return;
+  /// Schedules the next attempt, unless [generation] has already been
+  /// superseded — a dropped socket from a previous attempt must not restart a
+  /// connection the current one owns, or two reconnect loops end up running
+  /// against the same session.
+  void _scheduleReconnect(int generation) {
+    if (_closedByUser || generation != _generation) return;
+    _connected = false;
     _state.add(LinkState.disconnected);
-    Timer(_backoff.next(), () => _open(first: false));
+    Timer(_backoff.next(), () {
+      if (_closedByUser || generation != _generation) return;
+      _open(first: false);
+    });
   }
 
   /// Sends user keystrokes.
-  void sendInput(String data) {
+  ///
+  /// Returns false when there is no live connection to send on. The caller
+  /// decides what to do about it; what must not happen is this quietly
+  /// accepting the keystroke and dropping it, which is what writing to a stale
+  /// sink did — the user types a command into a disconnected terminal, sees it
+  /// echo nowhere, and has no way to tell that it never left the device.
+  ///
+  /// ponytail: no queue-and-replay. Buffering input across a reconnect sounds
+  /// helpful and is not: tmux keeps the session, so the keystrokes would arrive
+  /// seconds later against a screen that has moved on, and a half-typed command
+  /// completing itself after a reconnect is worse than one that plainly did not
+  /// go through.
+  bool sendInput(String data) {
+    if (!_connected) return false;
     _channel?.sink.add(jsonEncode({
       'type': 'input',
       'data': base64Encode(utf8.encode(data)),
     }));
+    return true;
   }
 
   /// Reports a new terminal grid size.
@@ -224,6 +277,7 @@ class SessionSocket {
   /// `window-size latest`, so whichever client resized last is the one the
   /// session's layout follows.
   void sendResize(int cols, int rows) {
+    if (!_connected) return;
     _channel?.sink.add(jsonEncode({'type': 'resize', 'cols': cols, 'rows': rows}));
   }
 
@@ -232,6 +286,10 @@ class SessionSocket {
   /// Only an explicit DELETE ends a session.
   Future<void> dispose() async {
     _closedByUser = true;
+    _connected = false;
+    // Bumping the generation makes every in-flight _open abandon itself at its
+    // next await instead of racing this teardown.
+    _generation++;
     await _channel?.sink.close();
     _decoder.close();
     await _output.close();

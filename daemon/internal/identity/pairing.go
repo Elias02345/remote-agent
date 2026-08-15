@@ -138,6 +138,15 @@ func (a *Attempt) Satisfy(f Factor, evidence []byte) error {
 	return nil
 }
 
+// Satisfied reports whether f has already been verified for this attempt.
+// Exists for callers, like /owner/pair/passkey/begin (owner.go), that need
+// to gate one factor's ceremony on another already being complete — the
+// passkey step must be last, so something has to be able to ask "is
+// password already done" from outside Attempt itself.
+func (a *Attempt) Satisfied(f Factor) bool {
+	return a.satisfied[f]
+}
+
 // Outstanding lists the required factors that are not yet satisfied.
 func (a *Attempt) Outstanding() []Factor {
 	var out []Factor

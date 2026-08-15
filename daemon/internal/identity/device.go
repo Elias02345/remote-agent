@@ -11,6 +11,7 @@ import (
 	"crypto/rand"
 	"errors"
 	"fmt"
+	"log"
 	"sync"
 	"time"
 )
@@ -49,6 +50,14 @@ type DeviceLookup interface {
 	// Device returns the device's public key and revoked flag. ok is false
 	// if no device with this id has ever been paired.
 	Device(id string) (pubKey ed25519.PublicKey, revoked bool, ok bool)
+}
+
+// DeviceToucher is an optional extension of DeviceLookup: a lookup that also
+// knows how to record when a device was last seen. Verify type-asserts for it
+// rather than requiring it, so the in-memory fakes the tests use stay two lines
+// long and do not have to implement storage they have no use for.
+type DeviceToucher interface {
+	TouchDevice(id string) error
 }
 
 // dummyKey stands in for an unknown device's public key. Verifying against
@@ -217,6 +226,16 @@ func (a *DeviceAuthenticator) Verify(deviceID string, signature []byte) error {
 	}
 	if !ed25519.Verify(pubKey, pc.nonce, signature) {
 		return ErrDeviceAuthFailed
+	}
+
+	// Best-effort: a successful authentication must not be turned into a
+	// failure because a bookkeeping write did not land. The owner losing one
+	// last-seen update is a cosmetic problem; a device being refused because
+	// the disk was briefly busy is not.
+	if toucher, ok := a.lookup.(DeviceToucher); ok {
+		if err := toucher.TouchDevice(deviceID); err != nil {
+			log.Printf("update last_seen_at for device %s: %v", deviceID, err)
+		}
 	}
 	return nil
 }

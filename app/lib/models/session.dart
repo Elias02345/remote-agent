@@ -41,6 +41,9 @@ class Session {
   /// What the row shows as its title.
   String get displayName => name.isNotEmpty ? name : id;
 
+  /// Whether the daemon still considers this session alive.
+  bool get isOpen => status == 'open';
+
   /// Human-readable last activity, for the row's right column.
   String lastActivityLabel(DateTime now) {
     if (lastActiveAt == 0) return '—';

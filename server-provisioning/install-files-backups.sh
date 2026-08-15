@@ -56,7 +56,12 @@ step_restic_password() {
 
 step_restic() {
   banner "Installing restic and backup scripts"
-  pkg_install restic
+  # sqlite is not optional here: the backup uses `sqlite3 .backup` to get a
+  # consistent copy of the WAL-mode daemon database, and the restore test uses
+  # `PRAGMA integrity_check` to prove the copy actually opens. Without it both
+  # degrade to "some files came back", which is what the restore test exists to
+  # be better than.
+  pkg_install restic sqlite
   install -m 0755 "$SCRIPT_DIR/backup/claudecode-backup.sh" /usr/local/bin/claudecode-backup.sh
   install -m 0755 "$SCRIPT_DIR/backup/claudecode-restore-test.sh" /usr/local/bin/claudecode-restore-test.sh
   ok "Backup scripts installed"

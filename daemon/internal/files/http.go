@@ -12,7 +12,13 @@ import (
 	"path"
 	"strconv"
 	"strings"
+	"time"
 )
+
+// chunkReadTimeout bounds how long one PATCH body may take to arrive. Generous
+// on purpose: a phone on a bad connection uploading a large chunk is normal,
+// an hour of silence is not.
+const chunkReadTimeout = 15 * time.Minute
 
 // API serves the file endpoints from Section 8.1.
 //
@@ -47,12 +53,20 @@ func writeErr(w http.ResponseWriter, status int, msg string) {
 }
 
 // statusFor keeps a path-traversal attempt from being reported as a server
-// error: it is a refused request, and the distinction matters in logs.
+// error: it is a refused request, and the distinction matters in logs. The
+// same applies to the two ways a client can ask for an upload we will not
+// accept — both are bad requests, not failures on our side.
 func statusFor(err error) int {
-	if errors.Is(err, ErrOutsideRoots) {
+	switch {
+	case errors.Is(err, ErrOutsideRoots):
 		return http.StatusForbidden
+	case errors.Is(err, ErrMissingChecksum):
+		return http.StatusBadRequest
+	case errors.Is(err, ErrTooLarge):
+		return http.StatusRequestEntityTooLarge
+	default:
+		return http.StatusInternalServerError
 	}
-	return http.StatusInternalServerError
 }
 
 func (a *API) handleFiles(w http.ResponseWriter, r *http.Request) {
@@ -120,9 +134,10 @@ func setTusHeaders(w http.ResponseWriter) {
 
 // handleUploadCreate implements the tus creation extension.
 //
-// Headers: Upload-Length (required), Upload-Metadata with at least a
-// "filename" key and ideally a "sha256" key holding the hash the client
-// computed before sending.
+// Headers: Upload-Length (required, bounded by MaxUploadBytes) and
+// Upload-Metadata carrying a "filename" key and a "sha256" key holding the
+// hash the client computed before sending. Both metadata keys are required —
+// see Uploader.Create for why the hash is not optional.
 func (a *API) handleUploadCreate(w http.ResponseWriter, r *http.Request) {
 	setTusHeaders(w)
 
@@ -200,6 +215,18 @@ func (a *API) handleUploadResume(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			writeErr(w, http.StatusBadRequest, "Upload-Offset is required")
 			return
+		}
+
+		// The server has no ReadTimeout — it cannot have one, because the
+		// terminal WebSocket is long-lived and a global read deadline would
+		// kill idle sessions. That leaves this handler as the only place a
+		// slow-body client can be bounded, and without a bound one open PATCH
+		// that sends a byte a minute holds a connection and a file handle
+		// indefinitely, for free.
+		//
+		// Per-request, so it constrains the upload body and nothing else.
+		if err := http.NewResponseController(w).SetReadDeadline(time.Now().Add(chunkReadTimeout)); err != nil {
+			log.Printf("set read deadline for upload %s: %v", id, err)
 		}
 
 		newOffset, done, err := a.Uploader.WriteChunk(id, offset, r.Body)

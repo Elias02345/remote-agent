@@ -219,6 +219,25 @@ func sameOriginOrNone(r *http.Request) bool {
 	return strings.EqualFold(u.Host, r.Host)
 }
 
+// HandleHealthWS accepts a WebSocket upgrade, sends one message and closes.
+//
+// It exists for server-provisioning/cloudgate/verify-tunnel.sh: proving that
+// Upgrade headers survive CloudGate needs an upgrade that actually completes,
+// and every session route requires a single-use ticket the operator cannot
+// obtain before pairing their first device. Rather than weakening that, this is
+// a route with nothing behind it — no session lookup, no tmux, no PTY, no
+// reads from the client. The upgrader's same-origin check still applies.
+func HandleHealthWS(w http.ResponseWriter, r *http.Request) {
+	conn, err := upgrader.Upgrade(w, r, nil)
+	if err != nil {
+		// Upgrade has already written a response by this point.
+		return
+	}
+	defer conn.Close()
+	_ = conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
+	_ = conn.WriteJSON(serverMessage{Type: "health", Data: "ok"})
+}
+
 // handleStream pumps raw bytes between the client and a tmux attachment.
 //
 // Terminal output is base64-encoded inside the JSON envelope because PTY
@@ -243,6 +262,23 @@ func (m *Manager) handleStream(w http.ResponseWriter, r *http.Request, id string
 	}
 	defer conn.Close()
 
+	// The snapshot is taken BEFORE attaching, not after.
+	//
+	// Order matters here and the obvious order is wrong. Attaching starts tmux
+	// writing into the PTY immediately — including its own initial full redraw
+	// — so a snapshot captured afterwards describes a screen that is newer than
+	// bytes already sitting in the PTY buffer, waiting to be read. The client
+	// would then receive the newer state first and the older redraw second, and
+	// paint the stale one over it. Capturing first means everything the client
+	// sees after the snapshot is strictly newer than the snapshot.
+	snapshot, snapErr := m.Tmux.CapturePane(s.TmuxSession)
+	if snapErr != nil {
+		// Not fatal: a session that cannot be captured can still be attached,
+		// and the client simply waits for the next redraw instead of getting
+		// the current screen immediately.
+		log.Printf("capture-pane %s: %v", id, snapErr)
+	}
+
 	att, err := m.Tmux.Attach(s.TmuxSession, 80, 24)
 	if err != nil {
 		log.Printf("attach %s: %v", id, err)
@@ -261,8 +297,9 @@ func (m *Manager) handleStream(w http.ResponseWriter, r *http.Request, id string
 
 	// Deliver the current screen before the live stream, so a reconnecting
 	// client sees the present state immediately instead of an empty terminal
-	// until the next redraw.
-	if snapshot, err := m.Tmux.CapturePane(s.TmuxSession); err == nil && len(snapshot) > 0 {
+	// until the next redraw. Sent before the reader goroutine starts, so it
+	// cannot interleave with live output.
+	if len(snapshot) > 0 {
 		if err := send(serverMessage{Type: "output", Data: base64.StdEncoding.EncodeToString(snapshot)}); err != nil {
 			return
 		}

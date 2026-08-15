@@ -56,11 +56,14 @@ func main() {
 			"where partial resumable uploads are kept")
 
 		ownerEmail = flag.String("owner-email", "",
-			"owner account email for device pairing (Section 10.2); pairing stays disabled until this and --owner-password-hash are set")
+			"owner account email for device pairing (Section 10.2); pairing stays disabled until this and the password hash are set. "+
+				"Prefer the CCR_OWNER_EMAIL environment variable.")
 		ownerPasswordHash = flag.String("owner-password-hash", "",
-			"Argon2id hash of the owner password (see identity.HashPassword); the password pairing factor is unsatisfiable while this is empty")
+			"Argon2id hash of the owner password (see identity.HashPassword); the password pairing factor is unsatisfiable while this is empty. "+
+				"SECRET — prefer CCR_OWNER_PASSWORD_HASH; a flag value is world-readable in /proc/<pid>/cmdline.")
 		ownerTOTPSecret = flag.String("owner-totp-secret", "",
-			"RFC 6238 TOTP secret for the owner account (see identity.GenerateTOTPSecret); the TOTP pairing factor is unsatisfiable while this is empty")
+			"RFC 6238 TOTP secret for the owner account (see identity.GenerateTOTPSecret); the TOTP pairing factor is unsatisfiable while this is empty. "+
+				"SECRET — prefer CCR_OWNER_TOTP_SECRET; a flag value is world-readable in /proc/<pid>/cmdline.")
 
 		setupOwner = flag.Bool("setup-owner", false,
 			"generate the owner credentials (Argon2id hash + TOTP secret) and exit; reads the password from stdin")
@@ -69,12 +72,33 @@ func main() {
 			"DANGER: disable device authentication on /sessions and /files, for the xterm.js test client only. "+
 				"Refuses to start on a non-loopback bind address. Never the default.")
 
+		trustedProxies = flag.String("trusted-proxies", "",
+			"comma-separated CIDRs (or bare IPs) permitted to set CF-Connecting-IP / X-Forwarded-For. "+
+				"Set this to the address CloudGate connects from, otherwise every request through the tunnel "+
+				"shares one rate-limit bucket. Empty means no header is trusted.")
+
 		publicDomain = flag.String("public-domain", "",
 			"public domain this installation is reachable at (CCR_PUBLIC_DOMAIN in server-provisioning/.env.example). "+
 				"Used as the WebAuthn relying-party ID; the passkey pairing factor stays disabled while this is empty. "+
 				"Once a passkey is registered against it, changing this value invalidates every registered passkey.")
 	)
 	flag.Parse()
+
+	// Secrets belong in the environment, not in argv. /proc/<pid>/cmdline is
+	// world-readable, so a flag value is visible to every local account —
+	// including the coding agents this daemon starts, which run as the same
+	// user. /proc/<pid>/environ is 0400 and owner-only, which is not perfect
+	// separation but is the difference between "every account on the box" and
+	// "this uid and root".
+	//
+	// The flags stay for tests and for running the binary by hand; the
+	// environment only fills in what a flag did not already set, so an explicit
+	// flag still wins.
+	envDefault(ownerEmail, "CCR_OWNER_EMAIL")
+	envDefault(ownerPasswordHash, "CCR_OWNER_PASSWORD_HASH")
+	envDefault(ownerTOTPSecret, "CCR_OWNER_TOTP_SECRET")
+	envDefault(publicDomain, "CCR_PUBLIC_DOMAIN")
+	envDefault(trustedProxies, "CCR_TRUSTED_PROXIES")
 
 	if *setupOwner {
 		if err := runSetupOwner(os.Stdin, os.Stdout, *ownerEmail); err != nil {
@@ -150,6 +174,7 @@ func main() {
 		OwnerPasswordHash: *ownerPasswordHash,
 		OwnerTOTPSecret:   *ownerTOTPSecret,
 		PublicDomain:      *publicDomain,
+		TrustedProxies:    splitRoots(*trustedProxies),
 		InsecureNoAuth:    *insecureNoAuth,
 	})
 	if err != nil {
@@ -167,6 +192,15 @@ func main() {
 	log.Printf("claudecode-remoted listening on %s (db=%s, locks=%s)", *addr, *dbPath, lockMgr.Dir())
 	if err := srv.ListenAndServe(); err != nil {
 		log.Fatalf("server: %v", err)
+	}
+}
+
+// envDefault fills *target from the named environment variable when the flag
+// was left empty. Flag wins, so an explicit command line is never silently
+// overridden by a stale variable in the shell.
+func envDefault(target *string, key string) {
+	if *target == "" {
+		*target = os.Getenv(key)
 	}
 }
 
@@ -192,6 +226,10 @@ type routerConfig struct {
 	// fail-closed default) — see validatePublicDomain for the startup check
 	// that keeps a malformed value from reaching here at all.
 	PublicDomain string
+
+	// TrustedProxies are the CIDRs whose forwarded-for headers the rate
+	// limiter believes (identity.ClientIPResolver). Empty trusts none.
+	TrustedProxies []string
 
 	InsecureNoAuth bool
 }
@@ -234,6 +272,7 @@ func newRouter(cfg routerConfig) (wiredRouter, error) {
 		WebAuthnRPID:        cfg.PublicDomain,
 		WebAuthnDisplayName: "ClaudeCode Remote",
 		WebAuthnOrigins:     webAuthnOrigins,
+		TrustedProxies:      cfg.TrustedProxies,
 	}, identityStore, rateLimiter)
 
 	wsTickets := newWSTicketStore()
@@ -260,6 +299,32 @@ func newRouter(cfg routerConfig) (wiredRouter, error) {
 	// becomes authenticated in the first place.
 	owner.RegisterPairing(root)
 
+	// Passkey *registration* (webauthn_credentials rows), as distinct from
+	// the pairing chain's passkey *assertion* step above. Mounted twice:
+	// unauthenticated for the one-time bootstrap window (before any
+	// passkey exists, gated instead by email+password+TOTP in the body),
+	// and behind device auth + step-up for every enrollment after that.
+	// See identity/passkey_http.go's package comment for the full
+	// authorisation rule — HandlePasskeyRegisterBegin/Finish decide which
+	// window applies by reading DeviceIDFromContext, so the same handler
+	// works at both mounts.
+	root.HandleFunc("/owner/passkey/register/begin", owner.HandlePasskeyRegisterBegin)
+	root.HandleFunc("/owner/passkey/register/finish", owner.HandlePasskeyRegisterFinish)
+
+	root.Handle("/owner/passkey/enroll/begin", identity.RequireDevice(deviceAuth,
+		identity.RequireStepUp(stepUpGate, identity.ActionChangeSecuritySettings,
+			http.HandlerFunc(owner.HandlePasskeyRegisterBegin))))
+	// Finish deliberately does NOT require a second step-up grant. Grants
+	// are single-use (stepup.go), and Begin above already consumed one —
+	// requiring another here would repeat the exact bug the
+	// list-vs-revoke device-management split below exists to prevent: the
+	// obvious flow (begin, then finish) would spend the grant on begin and
+	// finish would always fail. The single-use, TTL-bounded registration_id
+	// Begin hands back — reachable only after that grant was consumed — is
+	// what authorizes finishing this specific ceremony.
+	root.Handle("/owner/passkey/enroll/finish", identity.RequireDevice(deviceAuth,
+		http.HandlerFunc(owner.HandlePasskeyRegisterFinish)))
+
 	// Revoking a device is a Section 10.1 sensitive action: even an
 	// already-paired device must not be able to do it on possession of its
 	// everyday Ed25519 key alone.
@@ -285,6 +350,24 @@ func newRouter(cfg routerConfig) (wiredRouter, error) {
 	root.Handle("/owner/devices/revoke", identity.RequireDevice(deviceAuth,
 		identity.RequireStepUp(stepUpGate, identity.ActionRevokeDevice, ownerDeviceRevokeMux)))
 
+	// The ceremony that actually issues the grant the route above consumes.
+	//
+	// Without it, StepUpGate.Grant had no production caller at all, so
+	// /owner/devices/revoke was not merely guarded — it was unreachable, and
+	// an owner with a stolen phone had no way to revoke that phone's key
+	// through the shipped system. Mounted inside RequireDevice so the grant
+	// binds to a device id that was cryptographically proven rather than
+	// claimed in a request body.
+	root.Handle("/owner/step-up", identity.RequireDevice(deviceAuth,
+		identity.StepUpHandler(identity.StepUpConfig{
+			Gate:         stepUpGate,
+			Limiter:      rateLimiter,
+			Resolver:     identity.NewClientIPResolver(cfg.TrustedProxies),
+			Email:        cfg.OwnerEmail,
+			PasswordHash: cfg.OwnerPasswordHash,
+			TOTPSecret:   cfg.OwnerTOTPSecret,
+		})))
+
 	// Lets an already-paired device sign the everyday Ed25519
 	// challenge-response (Section 5.4). Unauthenticated by necessity — a
 	// device has nothing to authenticate with yet at this step, exactly
@@ -299,6 +382,22 @@ func newRouter(cfg routerConfig) (wiredRouter, error) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"status":"ok"}`))
 	})
+
+	// A WebSocket that exists only to prove a WebSocket survives the tunnel.
+	//
+	// Plain HTTPS answering says nothing about whether a proxy strips Upgrade
+	// headers, and a proxy that does looks perfectly healthy right up until the
+	// first terminal is opened. The obvious check — upgrade against a real
+	// session path — cannot work: session routes require a single-use ticket,
+	// so the verifier gets a 401 before the handshake, and the only ways to
+	// make that check pass would be to hand it a real ticket (needs a paired
+	// device, which the operator does not have yet at this point) or to weaken
+	// the session auth (never).
+	//
+	// So: its own route, unauthenticated, which accepts the upgrade, says
+	// "ok", and closes. It reaches no session, reads nothing and starts
+	// nothing, and the same-origin check still applies.
+	root.HandleFunc("/health/ws", terminal.HandleHealthWS)
 
 	// The xterm.js test client from Phase 4. It exists to validate the
 	// protocol before the Flutter app is built, not as a shipping UI.

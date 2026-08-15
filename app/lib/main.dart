@@ -5,27 +5,36 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import 'api/client.dart';
+import 'api/device_identity.dart';
+import 'api/server_config.dart';
 import 'design/theme.dart';
 import 'design/tokens.dart';
+import 'screens/pairing.dart';
 import 'screens/session_list.dart';
 
 void main() {
-  runApp(const ClaudeCodeRemoteApp());
+  runApp(ClaudeCodeRemoteApp());
 }
 
 /// Root widget.
-class ClaudeCodeRemoteApp extends StatelessWidget {
-  const ClaudeCodeRemoteApp({super.key, this.baseUri});
+///
+/// Routes to [PairingScreen] until the device has a stored device_id and a
+/// configured daemon address, then to [SessionListScreen] — every session
+/// and file endpoint requires a paired device (architecture Section 5.4), so
+/// nothing past pairing is reachable before both exist.
+class ClaudeCodeRemoteApp extends StatefulWidget {
+  ClaudeCodeRemoteApp({super.key, DeviceIdentity? identity, ServerConfig? serverConfig})
+      : identity = identity ?? DeviceIdentity(),
+        serverConfig = serverConfig ?? ServerConfig();
 
-  /// Daemon base URI. Defaults to the loopback address the daemon binds to;
-  /// the real address is configured at pairing time.
-  final Uri? baseUri;
+  final DeviceIdentity identity;
+  final ServerConfig serverConfig;
 
-  /// Touch on Android and iOS, pointer on desktop and desktop web.
+  /// Touch on Android and iOS, pointer on desktop.
   ///
-  /// Chosen from the platform rather than the window width: a narrow window on
-  /// a desktop still has a mouse, and shrinking hit targets on a phone because
-  /// it is in landscape would be worse than useless.
+  /// Chosen from the platform rather than the window width: a narrow window
+  /// on a desktop still has a mouse, and shrinking hit targets on a phone
+  /// because it is in landscape would be worse than useless.
   static CcrDensity densityFor(TargetPlatform platform) =>
       switch (platform) {
         TargetPlatform.android || TargetPlatform.iOS => CcrDensity.touch,
@@ -33,16 +42,55 @@ class ClaudeCodeRemoteApp extends StatelessWidget {
       };
 
   @override
-  Widget build(BuildContext context) {
-    final density = densityFor(defaultTargetPlatform);
-    final uri = baseUri ?? Uri.parse('http://127.0.0.1:8080');
+  State<ClaudeCodeRemoteApp> createState() => _ClaudeCodeRemoteAppState();
+}
 
-    final api = ApiClient(
-      baseUri: uri,
-      // Device signing lands with the pairing flow; until then the daemon is
-      // run with --insecure-no-auth for local development only.
-      authHeaders: () async => const <String, String>{},
-    );
+class _ClaudeCodeRemoteAppState extends State<ClaudeCodeRemoteApp> {
+  bool _checking = true;
+  bool _paired = false;
+  Uri? _baseUri;
+
+  @override
+  void initState() {
+    super.initState();
+    _check();
+  }
+
+  /// Re-reads both halves of "is this app usable yet": a device_id and a
+  /// server address. [PairingScreen] calls this back once it has stored the
+  /// device_id it just got from `/owner/pair/complete`, so it never has to
+  /// know what happens after pairing — this is the only place that decides.
+  Future<void> _check() async {
+    final paired = await widget.identity.isPaired();
+    final baseUri = await widget.serverConfig.baseUri();
+    if (!mounted) return;
+    setState(() {
+      _paired = paired && baseUri != null;
+      _baseUri = baseUri;
+      _checking = false;
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final density = ClaudeCodeRemoteApp.densityFor(defaultTargetPlatform);
+
+    final Widget home;
+    if (_checking) {
+      home = const Scaffold(body: Center(child: CircularProgressIndicator()));
+    } else if (!_paired || _baseUri == null) {
+      home = PairingScreen(
+        identity: widget.identity,
+        serverConfig: widget.serverConfig,
+        onPaired: _check,
+      );
+    } else {
+      final api = ApiClient(
+        baseUri: _baseUri!,
+        authHeaders: deviceAuthHeaders(baseUri: _baseUri!, identity: widget.identity),
+      );
+      home = SessionListScreen(api: api);
+    }
 
     return MaterialApp(
       title: 'ClaudeCode Remote',
@@ -50,7 +98,7 @@ class ClaudeCodeRemoteApp extends StatelessWidget {
       theme: buildTheme(brightness: Brightness.light, density: density),
       darkTheme: buildTheme(brightness: Brightness.dark, density: density),
       themeMode: ThemeMode.system,
-      home: SessionListScreen(api: api),
+      home: home,
     );
   }
 }

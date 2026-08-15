@@ -1,30 +1,35 @@
 # app
 
-The cross-platform client (architecture Section 6): Android, Windows, Linux
-and Web from one Flutter codebase, `xterm.dart` for terminal emulation.
+The cross-platform client (architecture Section 6): Android, Windows and
+Linux from one Flutter codebase, `xterm.dart` for terminal emulation. Web is
+not a supported target — it was dropped rather than carried as a fourth
+platform nobody was testing.
 
-> **Status: Phase 9 (Android & polish) in progress.** The mobile control bar,
-> the resumable upload client, and the share-sheet suggestion overlay are
-> built and tested. What's still outstanding is listed under
-> [What's not built](#whats-not-built-and-why) and
-> [Outstanding: Android platform glue](#outstanding-android-platform-glue)
-> below — neither blocks Linux/Windows/Web.
+> **Status: Phase 10 (device pairing) built.** Key generation, secure
+> storage, per-request challenge signing and the pairing screen
+> (`lib/screens/pairing.dart`) are in place and tested. The three factors
+> are completed in the system browser against the daemon's own pairing
+> page — WebAuthn is a browser API, and keeping the password out of this
+> app means a compromised app never sees it. See
+> [What's not built](#whats-not-built-and-why) for what remains.
 
 ## Running it
 
-There is no `android/` directory yet (see below), so today this runs on
-desktop and web only:
+All three targets have platform projects. Android additionally needs a
+signing key for release builds (see below).
 
 ```bash
 cd app
 flutter pub get
-flutter run -d linux    # or -d windows, -d chrome
+flutter run -d linux    # or -d windows, or an Android device
 ```
 
 Point it at a running daemon (`cd daemon && go run ./cmd/claudecode-remoted
---db /tmp/ccr.db --lock-dir /tmp/ccr-locks`, see `daemon/README.md`) — the
-default base URI is `http://127.0.0.1:8080`, matching the daemon's default
-listen address.
+--db /tmp/ccr.db --lock-dir /tmp/ccr-locks`, see `daemon/README.md`). Unlike
+earlier phases there is no compiled-in default address any more — the app
+asks for the daemon's address on first run and persists it (`lib/api/server_config.dart`).
+The old default, the client's own loopback address, meant "the phone itself"
+on a phone, which is never where the daemon actually runs.
 
 ## Tests
 
@@ -34,11 +39,14 @@ flutter test
 ```
 
 `flutter analyze --fatal-warnings --no-fatal-infos` is the same check CI runs
-(`.github/workflows/ci.yml`, pinned to Flutter 3.24.5). A newer local Flutter
-SDK may report `CardTheme`/`DialogTheme` argument-type errors in
-`lib/design/theme.dart` that CI does not — that's an SDK-version skew
-(`ThemeData.cardTheme`/`dialogTheme` changed their expected parameter type in
-a later Flutter release), not a defect introduced by this phase's changes.
+(`.github/workflows/ci.yml`, pinned to Flutter 3.44.1). Match that version
+locally: `ThemeData.cardTheme`/`dialogTheme` changed their expected parameter
+type between releases, so a different SDK reports argument-type errors in
+`lib/design/theme.dart` that say nothing about the code.
+
+CI also builds every platform target — Linux on the Ubuntu runner, Windows on
+its own runner. `analyze` and `test` never touch a platform runner, so they
+cannot tell you whether the app still builds for one.
 
 ## What Phase 9 added
 
@@ -61,92 +69,89 @@ a later Flutter release), not a defect introduced by this phase's changes.
   on its own** — Section 8.3 is explicit that a file's arrival is a
   suggestion, not an injection, because the agent may be mid-keystroke.
 
-## Outstanding: Android platform glue
+## What Phase 10 added
 
-`flutter create` has never been run for this project, so there is no
-`android/` directory — hand-writing a Gradle project, manifest, and
-`MainActivity` from scratch would be far more likely to be subtly wrong than
-useful. The Dart side above is ready to receive a shared file's local path;
-what's missing is the OS-level plumbing that produces that path. Once
-someone runs:
+- **`lib/api/device_identity.dart`** — generates and stores the device's
+  Ed25519 keypair (Section 5.4) behind `flutter_secure_storage`, so the
+  private key lands in Android Keystore / Windows DPAPI / libsecret rather
+  than plain app storage. Plain storage is included in a phone backup;
+  restoring that backup on another device would clone a "working" device
+  identity nothing can tell apart from the original.
+- **`lib/api/server_config.dart`** — persists the operator-supplied daemon
+  address (SharedPreferences) and validates it before it is ever used: an
+  absolute http/https URI with a host, not a relative path or a bare scheme.
+- **`lib/api/pairing_client.dart`** — the unauthenticated REST client for
+  `/owner/pair/*`. Kept separate from `ApiClient` on purpose: pairing has to
+  work before there is a device credential to sign a request with, so it
+  must never go through the header-attaching path the rest of the app uses.
+- **`deviceAuthHeaders` in `lib/api/client.dart`** — the `authHeaders`
+  callback `ApiClient` and `TusUploader` both take: fetches a fresh
+  `/auth/challenge`, signs it with the device key, attaches
+  `X-Device-Id`/`X-Device-Signature`. Also fixed `ApiClient.streamTicket` to
+  call the daemon's actual ticket route, `/auth/ws-ticket` — it was posting
+  to `/sessions/{id}/ticket`, which the daemon has never served.
+- **`lib/screens/pairing.dart`** — walks `/owner/pair/start` →
+  (password/TOTP/passkey, completed in the system browser, never in this
+  app) → polling `GET /owner/pair/status` → one `POST /owner/pair/complete`,
+  then stores the device_id and
+  hands control back to `main.dart`. Includes an address entry step when
+  none is configured yet, and a "forget this device" action.
+- **`lib/main.dart`** now routes to `PairingScreen` until both a device_id
+  and a server address exist, and to `SessionListScreen` once they do.
 
-```bash
-cd app
-flutter create --platforms=android .
-```
+## Android
 
-apply this:
+The `android/` platform project exists and builds. Two things in it are
+deliberate rather than template defaults:
 
-1. **Add a share-intent plugin** (`receive_sharing_intent` is the usual
-   choice — it wraps exactly the manifest + native-side work below) to
-   `pubspec.yaml`, or hand-roll the two pieces it would otherwise generate:
+- **`applicationId` is `io.github.elias02345.claudecode_remote`**, not
+  `com.example.*`. An application id is permanent once anything is installed
+  under it.
+- **Release builds refuse to sign themselves with the debug key.** Create
+  `android/key.properties` (gitignored):
 
-2. **`android/app/src/main/AndroidManifest.xml`** — add an intent filter to
-   the main `<activity>` so "Send to ClaudeCode Remote" appears in other
-   apps' share sheets:
+  ```properties
+  storeFile=/absolute/path/to/upload-keystore.jks
+  storePassword=...
+  keyAlias=upload
+  keyPassword=...
+  ```
 
-   ```xml
-   <activity
-       android:name=".MainActivity"
-       ...>
-       <!-- existing intent-filter (MAIN/LAUNCHER) stays -->
+  Generate the keystore with:
 
-       <intent-filter>
-           <action android:name="android.intent.action.SEND" />
-           <category android:name="android.intent.category.DEFAULT" />
-           <data android:mimeType="*/*" />
-       </intent-filter>
-       <intent-filter>
-           <action android:name="android.intent.action.SEND_MULTIPLE" />
-           <category android:name="android.intent.category.DEFAULT" />
-           <data android:mimeType="*/*" />
-       </intent-filter>
-   </activity>
-   ```
+  ```bash
+  keytool -genkey -v -keystore upload-keystore.jks -keyalg RSA -keysize 2048 -validity 10000 -alias upload
+  ```
 
-3. **`android/app/src/main/kotlin/.../MainActivity.kt`** — a share intent
-   arrives as a `content://` URI, not a filesystem path, so it needs
-   resolving via `ContentResolver` before `ShareUploadService` (which takes a
-   `dart:io File`) can use it. `receive_sharing_intent` does this for you; the
-   shape of what it does, for reference:
+  Without that file `flutter build apk --release` fails with an explanation.
+  That is on purpose: a device that installs a debug-signed build can never
+  take a properly signed update afterwards, so the convenient fallback costs
+  more than it saves.
 
-   ```kotlin
-   class MainActivity : FlutterFragmentActivity() {
-       private val channel = "app.claudecoderemote/share"
+`MainActivity` handles `ACTION_SEND` and `ACTION_SEND_MULTIPLE`. A shared item
+arrives as a `content://` URI whose read grant does not outlive the activity,
+so the content is copied into the app's cache directory and Dart is handed a
+real path it can still open when an upload retries after a reconnect. Shares
+that arrive before the Flutter engine exists (a cold start from the share
+sheet) are queued and pulled by Dart via `takePendingShares`.
 
-       override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
-           super.configureFlutterEngine(flutterEngine)
-           MethodChannel(flutterEngine.dartExecutor.binaryMessenger, channel)
-               .setMethodCallHandler { call, result ->
-                   // The plugin (or hand-rolled equivalent) resolves the
-                   // incoming Intent's content:// URI to a cached file path
-                   // here and returns it to Dart, which then calls
-                   // ShareUploadService.shareFile with a real File.
-                   result.notImplemented()
-               }
-       }
-   }
-   ```
-
-   Note `FlutterFragmentActivity`, not `FlutterActivity` — most share-intent
-   and file-picker plugins require it.
-
-4. Wire a session-picker into whatever calls `ShareUploadService.shareFile`:
-   an incoming share intent doesn't know which running session's `to-agent/`
-   the file belongs to. That selection UI isn't built yet either — it's a
-   small piece deliberately left for whoever does this wiring, since it's app
-   navigation, not upload plumbing.
-
-This is unverified against a real Android build — there is nothing here to
-compile it against yet.
+Still missing on top of that: the session picker that decides *which* session a
+shared file belongs to. That is app navigation rather than upload plumbing.
 
 ## What's not built and why
 
-- **FIDO2 / hardware-key support is blocked on D-04** (`ROADMAP.md`), the
-  WebAuthn relying-party domain. A passkey is bound to a domain; there is
-  nothing to register a credential against until that's decided, so this
-  isn't stubbed — a stub would be a WebAuthn flow with nowhere to point,
-  which is worse than an honest gap.
+- **The file browser screen is not built.** `lib/api/` has the client for it
+  and it is tested; no screen uses it. `ROADMAP.md` Phase 8 listed it in scope.
+- **Passkeys need `CCR_PUBLIC_DOMAIN` set before they work at all** (D-04 in
+  `ROADMAP.md`). The registration and assertion paths are built now, but a
+  passkey is cryptographically bound to a relying-party ID, and this repo
+  ships no default domain — a guessed one could reach production, and an RP
+  ID cannot be changed afterwards without invalidating every passkey already
+  registered. Until the operator sets it, every passkey path fails closed and
+  pairing cannot complete. That is the intended behaviour, not a gap.
+- **No end-to-end run against a real authenticator.** The authorisation rules
+  around registration are unit-tested; a full ceremony needs a real browser
+  and a real authenticator against a real domain, which nothing in CI has.
 - **Push notifications are not added client-side.** Update summaries,
   pending-reboot notices, and failed-update errors already go out server-side
   via ntfy (architecture Section 4.5, `D-03` in `ROADMAP.md`). A Flutter
