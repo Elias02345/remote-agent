@@ -21,8 +21,11 @@ through unchanged.
 | 8 Client app skeleton | done |
 | 9 Android & polish | in progress |
 
-Everything a machine can check runs in CI: shell lint, four container harnesses,
-the Go suite with `-race`, and `flutter analyze` + `flutter test`.
+Everything a machine can check runs in CI: shell lint, five container
+harnesses, the Go suite with `-race`, and `flutter analyze` + `flutter test`.
+One of those harnesses boots systemd as PID 1 and actually starts the units,
+which is what found three bugs that only appear as a service — see the
+changelog.
 
 Three things need a human and are listed in
 [`TODO_FOR_USER.md`](TODO_FOR_USER.md): a target server to verify Phase 1–3

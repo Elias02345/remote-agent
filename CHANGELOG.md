@@ -40,6 +40,32 @@ version number would claim more than is true. See `TODO_FOR_USER.md`.
 - Mobile control bar with a latching Ctrl, resumable uploads, and share-to-
   session that offers a file rather than typing into a running agent.
 
+### Fixed before anyone ran it for real
+Found by an end-to-end harness that boots systemd as PID 1 and actually
+*starts* the units, rather than only installing them. All three share a
+property: the code works when run by hand in a shell, which is why nothing
+caught them earlier.
+
+- **Every hourly backup would have failed.** systemd sets neither `$HOME` nor
+  `$XDG_CACHE_HOME` for a service without `User=`, and restic refuses to run
+  without a cache directory it can locate. Both restic scripts now set
+  `RESTIC_CACHE_DIR` explicitly.
+- **The idle updater aborted on any non-standard kernel package.** Reading the
+  installed kernel through `pacman -Q linux` under `set -euo pipefail` killed
+  the script whenever no package is named exactly `linux` — that is everyone
+  running `linux-lts`, `linux-zen` or `linux-hardened`. It failed after the
+  update, before writing the reboot flag.
+- **Truecolor was quantised to 256 colours.** tmux only forwards 24-bit colour
+  to clients declared RGB-capable. Caught by driving the real test client in a
+  browser and inspecting the terminal's cell attributes, where a 24-bit escape
+  arrived as palette index 74 instead of `#62A8E8`.
+- **The daemon was never installed by anything.** Four installers covered the
+  server, the agent stack, the updater and the shares; the binary the product
+  is about had no systemd unit at all.
+- **The sudoers whitelist named a unit that does not exist**
+  (`claudecode-daemon` vs. `claudecode-remoted`), so the agent user could
+  never have restarted the service.
+
 ### Known gaps
 - No `app/android/` platform folder; `flutter create` has never been run.
 - FIDO2 hardware keys are not implemented — a passkey binds to a domain, and
