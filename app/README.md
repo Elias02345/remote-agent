@@ -1,34 +1,33 @@
 # app
 
-The cross-platform client (architecture Section 6): Android, Windows, Linux
-and Web from one Flutter codebase, `xterm.dart` for terminal emulation.
+The cross-platform client (architecture Section 6): Android, Windows and
+Linux from one Flutter codebase, `xterm.dart` for terminal emulation. Web is
+not a supported target — it was dropped rather than carried as a fourth
+platform nobody was testing.
 
-> **Status: Phase 9 (Android & polish) in progress.** The mobile control bar,
-> the resumable upload client, the share-sheet suggestion overlay and the
-> Android platform project are built and tested.
->
-> **This client cannot yet pair with a daemon that has authentication
-> enabled.** There is no key generation, no key storage, no challenge signing
-> and no pairing screen, so every authenticated request is refused. Running it
-> against a daemon means running that daemon with `--insecure-no-auth`, which
-> only works on a loopback address. See
-> [What's not built](#whats-not-built-and-why).
+> **Status: Phase 10 (device pairing) in progress.** Key generation, secure
+> storage, per-request challenge signing and the pairing screen
+> (`lib/screens/pairing.dart`) are built and tested; see
+> [What's not built](#whats-not-built-and-why) for what is still missing on
+> top of that.
 
 ## Running it
 
-All four targets have platform projects. Android additionally needs a signing
-key for release builds (see below).
+All three targets have platform projects. Android additionally needs a
+signing key for release builds (see below).
 
 ```bash
 cd app
 flutter pub get
-flutter run -d linux    # or -d windows, -d chrome, or an Android device
+flutter run -d linux    # or -d windows, or an Android device
 ```
 
 Point it at a running daemon (`cd daemon && go run ./cmd/claudecode-remoted
---db /tmp/ccr.db --lock-dir /tmp/ccr-locks`, see `daemon/README.md`) — the
-default base URI is `http://127.0.0.1:8080`, matching the daemon's default
-listen address.
+--db /tmp/ccr.db --lock-dir /tmp/ccr-locks`, see `daemon/README.md`). Unlike
+earlier phases there is no compiled-in default address any more — the app
+asks for the daemon's address on first run and persists it (`lib/api/server_config.dart`).
+The old default, the client's own loopback address, meant "the phone itself"
+on a phone, which is never where the daemon actually runs.
 
 ## Tests
 
@@ -43,9 +42,14 @@ locally: `ThemeData.cardTheme`/`dialogTheme` changed their expected parameter
 type between releases, so a different SDK reports argument-type errors in
 `lib/design/theme.dart` that say nothing about the code.
 
-CI also builds every platform target — web and Linux on the Ubuntu runner,
-Windows on its own runner. `analyze` and `test` never touch a platform runner,
-so they cannot tell you whether the app still builds for one.
+CI also builds every platform target — Linux on the Ubuntu runner, Windows on
+its own runner. `analyze` and `test` never touch a platform runner, so they
+cannot tell you whether the app still builds for one.
+
+`.github/workflows/ci.yml` still has a `flutter build web --release` step
+left over from before Web was dropped as a target; that is outside `app/`
+and was not touched here, but it will fail the next time CI runs against
+this branch until it is removed.
 
 ## What Phase 9 added
 
@@ -67,6 +71,35 @@ so they cannot tell you whether the app still builds for one.
   with an "Insert into terminal" button. **Neither ever writes to a terminal
   on its own** — Section 8.3 is explicit that a file's arrival is a
   suggestion, not an injection, because the agent may be mid-keystroke.
+
+## What Phase 10 added
+
+- **`lib/api/device_identity.dart`** — generates and stores the device's
+  Ed25519 keypair (Section 5.4) behind `flutter_secure_storage`, so the
+  private key lands in Android Keystore / Windows DPAPI / libsecret rather
+  than plain app storage. Plain storage is included in a phone backup;
+  restoring that backup on another device would clone a "working" device
+  identity nothing can tell apart from the original.
+- **`lib/api/server_config.dart`** — persists the operator-supplied daemon
+  address (SharedPreferences) and validates it before it is ever used: an
+  absolute http/https URI with a host, not a relative path or a bare scheme.
+- **`lib/api/pairing_client.dart`** — the unauthenticated REST client for
+  `/owner/pair/*`. Kept separate from `ApiClient` on purpose: pairing has to
+  work before there is a device credential to sign a request with, so it
+  must never go through the header-attaching path the rest of the app uses.
+- **`deviceAuthHeaders` in `lib/api/client.dart`** — the `authHeaders`
+  callback `ApiClient` and `TusUploader` both take: fetches a fresh
+  `/auth/challenge`, signs it with the device key, attaches
+  `X-Device-Id`/`X-Device-Signature`. Also fixed `ApiClient.streamTicket` to
+  call the daemon's actual ticket route, `/auth/ws-ticket` — it was posting
+  to `/sessions/{id}/ticket`, which the daemon has never served.
+- **`lib/screens/pairing.dart`** — walks `/owner/pair/start` →
+  (password/TOTP/passkey, completed in the system browser, never in this
+  app) → polling → `/owner/pair/complete`, then stores the device_id and
+  hands control back to `main.dart`. Includes an address entry step when
+  none is configured yet, and a "forget this device" action.
+- **`lib/main.dart`** now routes to `PairingScreen` until both a device_id
+  and a server address exist, and to `SessionListScreen` once they do.
 
 ## Android
 
@@ -109,15 +142,15 @@ shared file belongs to. That is app navigation rather than upload plumbing.
 
 ## What's not built and why
 
-- **Device pairing is not implemented in the client.** This is the largest
-  outstanding gap in the project, so it is stated first rather than last. The
-  daemon's three-factor pairing chain is complete and fail-closed; the app has
-  no way to walk it. Missing: Ed25519 key generation, platform-backed key
-  storage, challenge signing against `/auth/challenge`, a pairing screen, and
-  a setting for the daemon's address (it currently defaults to its own
-  loopback address, which on a phone means the phone itself). Until this
-  exists, the app can only talk to a daemon started with `--insecure-no-auth`,
-  which the daemon refuses on any non-loopback bind address.
+- **The daemon has no `/owner/pair/status` route.** The pairing screen polls
+  completion by calling `POST /owner/pair/complete` every two seconds instead
+  (`lib/api/pairing_client.dart`): the daemon has no separate status
+  endpoint, and that call already answers with a 409 and the remaining
+  factors when pairing is not finished yet
+  (`daemon/internal/identity/owner.go`, `handlePairComplete`), so it doubles
+  as the status check. If a `/owner/pair/status` route is added later this
+  can switch to polling that instead, but there is nothing in the current
+  daemon build for it to call.
 - **The file browser screen is not built.** `lib/api/` has the client for it
   and it is tested; no screen uses it. `ROADMAP.md` Phase 8 listed it in scope.
 - **FIDO2 / hardware-key support is blocked on D-04** (`ROADMAP.md`), the

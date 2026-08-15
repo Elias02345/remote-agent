@@ -156,19 +156,24 @@ jobs:
       - name: Test
         run: flutter test
 
-      # The ROADMAP claimed the desktop and web targets built long before any
-      # of them had a platform directory at all — `flutter build web` answered
-      # "This project is not configured for the web". Analyze and test say
-      # nothing about that: they run against lib/ and never touch a platform
-      # runner. These steps are the only thing standing between "we support
-      # Linux and Web" and it being true.
-      - name: Build for web
-        run: flutter build web --release
-
+      # Web is deliberately not a target any more: a browser cannot hold a
+      # hardware-backed device key, and carrying a fourth platform whose
+      # identity story is strictly weaker than the other three was not worth
+      # it. app/web/ is gone, so there is nothing to build here.
+      #
+      # Linux and Windows are still built, because analyze and test run
+      # against lib/ and never touch a platform runner — they cannot tell you
+      # whether the app still builds for one.
+      # libsecret and jsoncpp are flutter_secure_storage_linux's dependencies,
+      # not Flutter's own. The device's Ed25519 private key goes into the
+      # system keyring rather than a file, which is the whole reason that
+      # plugin is in the dependency list — so on Linux the keyring library is
+      # a build requirement, and its absence fails at link time with an error
+      # that says nothing about keys.
       - name: Install Linux desktop build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y ninja-build libgtk-3-dev
+          sudo apt-get install -y ninja-build libgtk-3-dev libsecret-1-dev libjsoncpp-dev
 
       - name: Build for Linux desktop
         run: flutter build linux --release

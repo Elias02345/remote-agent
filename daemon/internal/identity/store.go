@@ -9,8 +9,11 @@ import (
 	"crypto/ed25519"
 	"encoding/base64"
 	"fmt"
+	"strings"
 
 	"github.com/Elias02345/remote-agent/daemon/internal/db"
+	"github.com/go-webauthn/webauthn/protocol"
+	"github.com/go-webauthn/webauthn/webauthn"
 )
 
 // Store adapts *db.DB to this package's storage needs: DeviceLookup for the
@@ -111,4 +114,104 @@ func (s *Store) ListDevices() ([]DeviceInfo, error) {
 // tell "no such device" apart from a real storage error.
 func (s *Store) RevokeDevice(id string) error {
 	return s.db.RevokeDevice(id)
+}
+
+// OwnerUserHandle returns the WebAuthn user handle for the single owner
+// account (see identity.newOwnerWebAuthnUser and db.DB.OwnerUserHandle for
+// why it is random and never the email).
+func (s *Store) OwnerUserHandle() ([]byte, error) {
+	handle, err := s.db.OwnerUserHandle()
+	if err != nil {
+		return nil, fmt.Errorf("owner user handle: %w", err)
+	}
+	return handle, nil
+}
+
+// AddWebAuthnCredential persists a newly registered passkey. name is the
+// caller-supplied label the owner sees later (DeviceInfo.Name's
+// counterpart for passkeys); everything else is exactly what go-webauthn
+// already validated during the registration ceremony.
+func (s *Store) AddWebAuthnCredential(name string, cred *webauthn.Credential) error {
+	transports := make([]string, len(cred.Transport))
+	for i, t := range cred.Transport {
+		transports[i] = string(t)
+	}
+	return s.db.AddWebAuthnCredential(db.WebAuthnCredential{
+		ID:              base64.RawURLEncoding.EncodeToString(cred.ID),
+		Name:            name,
+		PublicKey:       cred.PublicKey,
+		AttestationType: cred.AttestationType,
+		AAGUID:          cred.Authenticator.AAGUID,
+		SignCount:       cred.Authenticator.SignCount,
+		BackupEligible:  cred.Flags.BackupEligible,
+		BackupState:     cred.Flags.BackupState,
+		Transports:      strings.Join(transports, ","),
+	})
+}
+
+// ListWebAuthnCredentials returns every stored passkey, decoded back into
+// go-webauthn's own Credential type so BeginLogin/ValidateLogin can use
+// them directly.
+//
+// A row whose id does not decode as base64url is skipped rather than
+// handed to go-webauthn as a corrupted credential id it might partially
+// match against — same reasoning as Store.Device's malformed-key handling
+// above: a corrupted DB row must never become a bypass or a crash.
+func (s *Store) ListWebAuthnCredentials() ([]webauthn.Credential, error) {
+	rows, err := s.db.ListWebAuthnCredentials()
+	if err != nil {
+		return nil, fmt.Errorf("list webauthn credentials: %w", err)
+	}
+	out := make([]webauthn.Credential, 0, len(rows))
+	for _, r := range rows {
+		id, err := base64.RawURLEncoding.DecodeString(r.ID)
+		if err != nil {
+			continue
+		}
+		var transports []protocol.AuthenticatorTransport
+		if r.Transports != "" {
+			for _, t := range strings.Split(r.Transports, ",") {
+				transports = append(transports, protocol.AuthenticatorTransport(t))
+			}
+		}
+		out = append(out, webauthn.Credential{
+			ID:              id,
+			PublicKey:       r.PublicKey,
+			AttestationType: r.AttestationType,
+			Transport:       transports,
+			Flags: webauthn.CredentialFlags{
+				BackupEligible: r.BackupEligible,
+				BackupState:    r.BackupState,
+			},
+			Authenticator: webauthn.Authenticator{
+				AAGUID:    r.AAGUID,
+				SignCount: r.SignCount,
+			},
+		})
+	}
+	return out, nil
+}
+
+// CountWebAuthnCredentials reports how many passkeys are registered — the
+// single source of truth passkey_http.go uses to decide whether the
+// bootstrap registration window is still open.
+func (s *Store) CountWebAuthnCredentials() (int, error) {
+	n, err := s.db.CountWebAuthnCredentials()
+	if err != nil {
+		return 0, fmt.Errorf("count webauthn credentials: %w", err)
+	}
+	return n, nil
+}
+
+// UpdateWebAuthnSignCount persists a credential's updated sign counter
+// after a successful assertion. Returns sql.ErrNoRows, unwrapped, if id is
+// not a known credential — same convention as RevokeDevice above.
+func (s *Store) UpdateWebAuthnSignCount(id string, count uint32) error {
+	return s.db.UpdateWebAuthnSignCount(id, count)
+}
+
+// TouchWebAuthnCredential records that a passkey just authenticated
+// successfully — the WebAuthn equivalent of TouchDevice above.
+func (s *Store) TouchWebAuthnCredential(id string) error {
+	return s.db.TouchWebAuthnCredential(id)
 }

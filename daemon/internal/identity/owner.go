@@ -19,19 +19,30 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"strings"
 	"sync"
+
+	"github.com/go-webauthn/webauthn/webauthn"
 )
 
 // ownerDeviceStore is everything Owner needs to persist and manage paired
-// devices. Defined here, by the consumer, rather than in store.go, the
-// implementer — idiomatic Go, and it keeps this file from needing to know
-// Store is backed by *db.DB at all. *Store satisfies it.
+// devices and registered passkeys. Defined here, by the consumer, rather
+// than in store.go, the implementer — idiomatic Go, and it keeps this file
+// from needing to know Store is backed by *db.DB at all. *Store satisfies
+// it.
 type ownerDeviceStore interface {
 	PairDevice(id, name, platform, pubKeyB64 string) error
 	ListDevices() ([]DeviceInfo, error)
 	RevokeDevice(id string) error
+
+	OwnerUserHandle() ([]byte, error)
+	AddWebAuthnCredential(name string, cred *webauthn.Credential) error
+	ListWebAuthnCredentials() ([]webauthn.Credential, error)
+	CountWebAuthnCredentials() (int, error)
+	UpdateWebAuthnSignCount(id string, count uint32) error
+	TouchWebAuthnCredential(id string) error
 }
 
 // OwnerConfig configures the single owner account devices pair against.
@@ -96,6 +107,14 @@ type pairingRecord struct {
 	attempt    *Attempt
 	deviceName string
 	platform   string
+
+	// passkeyAdap is this attempt's FactorPasskey verifier — one instance
+	// per attempt (webauthn.go's boundPasskeyVerifier doc comment explains
+	// why it cannot be shared). handlePairStart creates and registers it;
+	// /owner/pair/passkey/begin binds it once BeginLogin succeeds;
+	// /owner/pair/passkey/finish drives it indirectly through
+	// Attempt.Satisfy, via satisfyFactor.
+	passkeyAdap *boundPasskeyVerifier
 }
 
 // Owner drives the /owner/pair/* and /owner/devices* routes.
@@ -123,6 +142,14 @@ type Owner struct {
 
 	mu       sync.Mutex
 	attempts map[string]*pairingRecord
+
+	// regMu/regSessions track in-progress WebAuthn *registration*
+	// ceremonies (passkey_http.go) — a separate concern and a separate
+	// lock from pairing attempts above: registration can happen before any
+	// device is paired at all (the bootstrap window) and again afterwards
+	// per enrolled passkey, on its own lifecycle.
+	regMu       sync.Mutex
+	regSessions map[string]*regSession
 }
 
 // NewOwner builds the pairing/device-management handlers for cfg, backed by
@@ -136,6 +163,7 @@ func NewOwner(cfg OwnerConfig, store ownerDeviceStore, limiter *RateLimiter) *Ow
 		limiter:         limiter,
 		resolver:        NewClientIPResolver(cfg.TrustedProxies),
 		attempts:        make(map[string]*pairingRecord),
+		regSessions:     make(map[string]*regSession),
 		passkeyVerifier: NewWebAuthnVerifier(cfg.WebAuthnRPID, cfg.WebAuthnDisplayName, cfg.WebAuthnOrigins),
 	}
 	if cfg.PasswordHash != "" {
@@ -147,13 +175,17 @@ func NewOwner(cfg OwnerConfig, store ownerDeviceStore, limiter *RateLimiter) *Ow
 	return o
 }
 
-// verifiers builds the map NewAttempt expects. A factor whose verifier is
-// nil is simply omitted — NewAttempt's own fallback (pairing.go) then
-// substitutes the fail-closed "not implemented" default, so there is
-// exactly one place in the codebase that decides what an absent factor
-// does, and this file does not duplicate it.
+// verifiers builds the password/TOTP half of the map NewAttempt expects. A
+// factor whose verifier is nil is simply omitted — NewAttempt's own
+// fallback (pairing.go) then substitutes the fail-closed "not implemented"
+// default, so there is exactly one place in the codebase that decides what
+// an absent factor does, and this file does not duplicate it.
+//
+// FactorPasskey is deliberately NOT set here: it needs one fresh
+// *boundPasskeyVerifier per attempt (webauthn.go), so handlePairStart adds
+// it itself after calling this.
 func (o *Owner) verifiers() map[Factor]Verifier {
-	m := map[Factor]Verifier{FactorPasskey: o.passkeyVerifier}
+	m := map[Factor]Verifier{}
 	if o.passwordVerifier != nil {
 		m[FactorPassword] = o.passwordVerifier
 	}
@@ -203,8 +235,10 @@ func (o *Owner) RegisterPairing(mux *http.ServeMux) {
 	mux.HandleFunc("/owner/pair/start", o.handlePairStart)
 	mux.HandleFunc("/owner/pair/password", o.handlePairPassword)
 	mux.HandleFunc("/owner/pair/totp", o.handlePairTOTP)
+	mux.HandleFunc("/owner/pair/passkey/begin", o.handlePairPasskeyBegin)
 	mux.HandleFunc("/owner/pair/passkey", o.handlePairPasskey)
 	mux.HandleFunc("/owner/pair/complete", o.handlePairComplete)
+	mux.HandleFunc("/owner/pair/status", o.handlePairStatus)
 }
 
 // RegisterDeviceManagement mounts /owner/devices and /owner/devices/revoke.
@@ -262,13 +296,26 @@ func (o *Owner) handlePairStart(w http.ResponseWriter, r *http.Request) {
 		writeAuthError(w, http.StatusInternalServerError, "failed to start pairing")
 		return
 	}
-	attempt := NewAttempt(id, body.DevicePubKey, o.verifiers())
+
+	// One passkey adapter per attempt (webauthn.go's boundPasskeyVerifier
+	// doc comment explains why a shared one is wrong). Its callback is
+	// wired once, here, rather than per-request later — recordPasskeyUse
+	// only needs o.store, which never changes for the lifetime of Owner.
+	passkeyAdap := newBoundPasskeyVerifier(o.passkeyVerifier)
+	passkeyAdap.setOnValidated(o.recordPasskeyUse)
+
+	verifiers := o.verifiers()
+	verifiers[FactorPasskey] = passkeyAdap
+	attempt := NewAttempt(id, body.DevicePubKey, verifiers)
 
 	o.mu.Lock()
 	o.sweepLocked()
 	full := len(o.attempts) >= maxPairingAttempts
 	if !full {
-		o.attempts[id] = &pairingRecord{attempt: attempt, deviceName: body.DeviceName, platform: body.Platform}
+		o.attempts[id] = &pairingRecord{
+			attempt: attempt, deviceName: body.DeviceName, platform: body.Platform,
+			passkeyAdap: passkeyAdap,
+		}
 	}
 	o.mu.Unlock()
 
@@ -349,6 +396,88 @@ func (o *Owner) handlePairTOTP(w http.ResponseWriter, r *http.Request) {
 	o.satisfyFactor(w, ip, body.PairingID, FactorTOTP, []byte(body.Code))
 }
 
+// handlePairPasskeyBegin starts the pairing chain's third-factor WebAuthn
+// assertion ceremony. It refuses unless FactorPassword and FactorTOTP are
+// already satisfied for this exact attempt — the passkey step must be
+// last, so an unauthenticated caller cannot spend a WebAuthn challenge (or
+// learn anything about the RP's configuration) before proving the first
+// two factors. On success it binds the attempt's per-attempt adapter
+// (pairingRecord.passkeyAdap) to the session BeginLogin returned, so the
+// later assertion in handlePairPasskey has something to validate against.
+func (o *Owner) handlePairPasskeyBegin(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeAuthError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	var body struct {
+		PairingID string `json:"pairing_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeAuthError(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+
+	ip := o.clientIP(r)
+	if err := o.limiter.Allow(ip, o.email); err != nil {
+		writeAuthError(w, http.StatusTooManyRequests, "too many failed attempts")
+		return
+	}
+
+	o.mu.Lock()
+	o.sweepLocked()
+	rec, ok := o.attempts[body.PairingID]
+	var ready bool
+	if ok {
+		ready = rec.attempt.Satisfied(FactorPassword) && rec.attempt.Satisfied(FactorTOTP)
+	}
+	o.mu.Unlock()
+
+	if !ok {
+		writeAuthError(w, http.StatusNotFound, "unknown pairing attempt")
+		return
+	}
+	if !ready {
+		writeAuthError(w, http.StatusConflict, "password and totp must be satisfied before the passkey step")
+		return
+	}
+
+	user, err := o.passkeyUser()
+	if err != nil {
+		writeAuthError(w, http.StatusInternalServerError, "failed to prepare passkey ceremony")
+		return
+	}
+	assertion, session, err := o.passkeyVerifier.BeginLogin(user)
+	if err != nil {
+		// Unconfigured RP ID (D-04), or no credential registered yet to
+		// build an allow-list from: fail closed, no fallback.
+		writeAuthError(w, http.StatusServiceUnavailable, "passkey ceremony unavailable")
+		return
+	}
+
+	o.mu.Lock()
+	rec, ok = o.attempts[body.PairingID]
+	if ok {
+		rec.passkeyAdap.bind(user, session)
+	}
+	o.mu.Unlock()
+	if !ok {
+		// Expired or completed by another request in the time BeginLogin
+		// took to run.
+		writeAuthError(w, http.StatusGone, "pairing attempt expired")
+		return
+	}
+
+	writeOwnerJSON(w, http.StatusOK, assertion)
+}
+
+// handlePairPasskey completes the pairing chain's third factor: the
+// browser's navigator.credentials.get() response, validated against
+// whatever handlePairPasskeyBegin bound this attempt's adapter to.
+// satisfyFactor already does everything factor-specific handling needs —
+// including, via the adapter's onValidated callback, persisting the
+// credential's updated sign counter and refusing a cloned authenticator
+// (recordPasskeyUse, below) — so this handler is no different in shape
+// from handlePairPassword or handlePairTOTP.
 func (o *Owner) handlePairPasskey(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeAuthError(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -368,13 +497,121 @@ func (o *Owner) handlePairPasskey(w http.ResponseWriter, r *http.Request) {
 		writeAuthError(w, http.StatusTooManyRequests, "too many failed attempts")
 		return
 	}
-	// No bypass, no dev flag: while WebAuthnRPID is unset (CCR_PUBLIC_DOMAIN
-	// not yet configured for this installation, D-04), o.passkeyVerifier.Verify
-	// always returns an error wrapping
-	// ErrRelyingPartyNotConfigured (webauthn.go), so satisfyFactor's
-	// generic failure branch is all that can ever run here. That is
-	// correct and deliberate, not a gap to fill in later.
+	// No bypass, no dev flag: an attempt whose adapter was never bound
+	// (handlePairPasskeyBegin never called, or it failed — e.g. D-04 still
+	// open) fails with ErrPasskeyNotBound (webauthn.go), which
+	// satisfyFactor's generic failure branch handles exactly like a wrong
+	// password. That is correct and deliberate, not a gap to fill in
+	// later.
 	o.satisfyFactor(w, ip, body.PairingID, FactorPasskey, body.Assertion)
+}
+
+// handlePairStatus reports one pairing attempt's progress without
+// authenticating the caller — the pairing_id itself, an unguessable token
+// handed out by /owner/pair/start, is what authorizes reading it. The
+// response deliberately excludes the device id and public key: nothing
+// about the attempt beyond "these factors remain" and "is it done" is
+// this endpoint's business, and a pairing id that does not exist gets
+// exactly 404, nothing more specific.
+func (o *Owner) handlePairStatus(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeAuthError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	pairingID := r.URL.Query().Get("pairing_id")
+	if pairingID == "" {
+		writeAuthError(w, http.StatusBadRequest, "pairing_id is required")
+		return
+	}
+
+	o.mu.Lock()
+	o.sweepLocked()
+	rec, ok := o.attempts[pairingID]
+	var outstanding []Factor
+	var completed bool
+	if ok {
+		outstanding = rec.attempt.Outstanding()
+		completed = rec.attempt.Completed()
+	}
+	o.mu.Unlock()
+
+	if !ok {
+		writeAuthError(w, http.StatusNotFound, "unknown pairing attempt")
+		return
+	}
+	writeOwnerJSON(w, http.StatusOK, map[string]any{
+		"outstanding": outstanding,
+		"completed":   completed,
+	})
+}
+
+// passkeyUser builds the webauthn.User the single owner account presents
+// to every WebAuthn ceremony — registration and login alike: the same
+// stable handle from OwnerUserHandle, the same identity, backed by
+// whatever credentials are actually in the store right now
+// (ownerWebAuthnUser.WebAuthnCredentials reads fresh every call — see its
+// doc comment in webauthn_user.go).
+func (o *Owner) passkeyUser() (webauthn.User, error) {
+	handle, err := o.store.OwnerUserHandle()
+	if err != nil {
+		return nil, fmt.Errorf("load owner user handle: %w", err)
+	}
+	return newOwnerWebAuthnUser(handle, o.email, o.email, o.store), nil
+}
+
+// recordPasskeyUse is the callback every pairing attempt's
+// *boundPasskeyVerifier is wired to (handlePairStart). It persists a
+// validated assertion's updated sign counter and last-used timestamp, and
+// turns a cloned authenticator into a factor failure instead of a silent
+// pass.
+//
+// A sign count that fails to increase past what was last stored — while
+// the stored count is itself nonzero — means two authenticators are
+// presenting the same credential ID: the textbook signal for a cloned
+// passkey. Zero-to-zero is excluded on purpose: many platform
+// authenticators never implement a counter at all and report 0 on every
+// assertion, and treating that as a clone would permanently break every
+// passkey from one of those authenticators after its very first
+// successful use.
+//
+// ponytail: looks up the stored sign count by listing every credential and
+// scanning for a matching id, rather than adding a dedicated single-row
+// lookup method. The owner has a handful of passkeys at most; add a
+// GetWebAuthnCredential if this ever needs to scale past that.
+func (o *Owner) recordPasskeyUse(cred *webauthn.Credential) error {
+	id := base64.RawURLEncoding.EncodeToString(cred.ID)
+
+	creds, err := o.store.ListWebAuthnCredentials()
+	if err != nil {
+		return fmt.Errorf("load stored passkeys: %w", err)
+	}
+	var storedCount uint32
+	found := false
+	for _, c := range creds {
+		if base64.RawURLEncoding.EncodeToString(c.ID) == id {
+			storedCount = c.Authenticator.SignCount
+			found = true
+			break
+		}
+	}
+	if !found {
+		return fmt.Errorf("passkey credential is not registered")
+	}
+
+	newCount := cred.Authenticator.SignCount
+	if storedCount != 0 && newCount <= storedCount {
+		log.Printf("identity: refusing passkey %s: sign count did not increase (stored=%d, presented=%d) - possible cloned authenticator",
+			id, storedCount, newCount)
+		return fmt.Errorf("passkey sign count did not increase: possible cloned authenticator")
+	}
+
+	if err := o.store.UpdateWebAuthnSignCount(id, newCount); err != nil {
+		return fmt.Errorf("update sign count: %w", err)
+	}
+	if err := o.store.TouchWebAuthnCredential(id); err != nil {
+		return fmt.Errorf("touch credential: %w", err)
+	}
+	return nil
 }
 
 // satisfyFactor drives Attempt.Satisfy for one factor and reports the

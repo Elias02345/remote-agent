@@ -299,6 +299,32 @@ func newRouter(cfg routerConfig) (wiredRouter, error) {
 	// becomes authenticated in the first place.
 	owner.RegisterPairing(root)
 
+	// Passkey *registration* (webauthn_credentials rows), as distinct from
+	// the pairing chain's passkey *assertion* step above. Mounted twice:
+	// unauthenticated for the one-time bootstrap window (before any
+	// passkey exists, gated instead by email+password+TOTP in the body),
+	// and behind device auth + step-up for every enrollment after that.
+	// See identity/passkey_http.go's package comment for the full
+	// authorisation rule — HandlePasskeyRegisterBegin/Finish decide which
+	// window applies by reading DeviceIDFromContext, so the same handler
+	// works at both mounts.
+	root.HandleFunc("/owner/passkey/register/begin", owner.HandlePasskeyRegisterBegin)
+	root.HandleFunc("/owner/passkey/register/finish", owner.HandlePasskeyRegisterFinish)
+
+	root.Handle("/owner/passkey/enroll/begin", identity.RequireDevice(deviceAuth,
+		identity.RequireStepUp(stepUpGate, identity.ActionChangeSecuritySettings,
+			http.HandlerFunc(owner.HandlePasskeyRegisterBegin))))
+	// Finish deliberately does NOT require a second step-up grant. Grants
+	// are single-use (stepup.go), and Begin above already consumed one —
+	// requiring another here would repeat the exact bug the
+	// list-vs-revoke device-management split below exists to prevent: the
+	// obvious flow (begin, then finish) would spend the grant on begin and
+	// finish would always fail. The single-use, TTL-bounded registration_id
+	// Begin hands back — reachable only after that grant was consumed — is
+	// what authorizes finishing this specific ceremony.
+	root.Handle("/owner/passkey/enroll/finish", identity.RequireDevice(deviceAuth,
+		http.HandlerFunc(owner.HandlePasskeyRegisterFinish)))
+
 	// Revoking a device is a Section 10.1 sensitive action: even an
 	// already-paired device must not be able to do it on possession of its
 	// everyday Ed25519 key alone.

@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/go-webauthn/webauthn/webauthn"
 	"github.com/pquerna/otp/totp"
 )
 
@@ -21,10 +22,67 @@ import (
 type fakeDeviceStore struct {
 	mu     sync.Mutex
 	paired map[string]DeviceInfo
+
+	handle []byte
+	creds  map[string]webauthn.Credential // keyed by base64url(cred.ID)
 }
 
 func newFakeDeviceStore() *fakeDeviceStore {
-	return &fakeDeviceStore{paired: map[string]DeviceInfo{}}
+	return &fakeDeviceStore{paired: map[string]DeviceInfo{}, creds: map[string]webauthn.Credential{}}
+}
+
+func (f *fakeDeviceStore) OwnerUserHandle() ([]byte, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.handle == nil {
+		f.handle = []byte("fake-owner-handle")
+	}
+	return f.handle, nil
+}
+
+func (f *fakeDeviceStore) AddWebAuthnCredential(name string, cred *webauthn.Credential) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	id := base64.RawURLEncoding.EncodeToString(cred.ID)
+	f.creds[id] = *cred
+	return nil
+}
+
+func (f *fakeDeviceStore) ListWebAuthnCredentials() ([]webauthn.Credential, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]webauthn.Credential, 0, len(f.creds))
+	for _, c := range f.creds {
+		out = append(out, c)
+	}
+	return out, nil
+}
+
+func (f *fakeDeviceStore) CountWebAuthnCredentials() (int, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.creds), nil
+}
+
+func (f *fakeDeviceStore) UpdateWebAuthnSignCount(id string, count uint32) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	c, ok := f.creds[id]
+	if !ok {
+		return sql.ErrNoRows
+	}
+	c.Authenticator.SignCount = count
+	f.creds[id] = c
+	return nil
+}
+
+func (f *fakeDeviceStore) TouchWebAuthnCredential(id string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if _, ok := f.creds[id]; !ok {
+		return sql.ErrNoRows
+	}
+	return nil
 }
 
 func (f *fakeDeviceStore) PairDevice(id, name, platform, pubKeyB64 string) error {

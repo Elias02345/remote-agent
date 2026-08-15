@@ -24,6 +24,21 @@ dependencies:
   # Already in the tree as a transitive dependency of crypto; named here because
   # upload.dart imports it directly.
   convert: ^3.1.1
+  # Ed25519 keypair generation and signing for device auth (architecture
+  # Section 5.4). Not in dart:core, and this is the standard pub package for
+  # it rather than hand-rolling the algorithm.
+  cryptography: ^2.9.0
+  # Stores the device's Ed25519 private key in Android Keystore / Windows
+  # DPAPI / libsecret. Plain file/prefs storage would put the key in a phone
+  # backup, and restoring that backup on another device would clone a
+  # "working" device identity nothing can tell apart from the original.
+  flutter_secure_storage: ^11.0.0
+  # Persists the operator-supplied daemon address across restarts. Not
+  # security-sensitive like the device key, so SharedPreferences is enough.
+  shared_preferences: ^2.5.5
+  # Opens the pairing URL in the system browser — the three-factor chain
+  # happens there, not in this app (see pairing.dart).
+  url_launcher: ^6.3.2
 
 dev_dependencies:
   flutter_test:
