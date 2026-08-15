@@ -1,5 +1,31 @@
 # Networking and CloudGate
 
+## The address CloudGate forwards to
+
+The single most common way to get this wrong, and worth reading before
+anything else on this page: **the target address is resolved from CloudGate's
+point of view, not from the agent machine's.**
+
+| CloudGate runs… | Host entry target | Daemon binds to |
+|---|---|---|
+| on the same machine | `http://127.0.0.1:8080` | `127.0.0.1:8080` |
+| **on another machine** (the usual case) | `http://<agent machine's Tailscale IP>:8080` | that same address |
+
+If CloudGate lives elsewhere and the entry says `127.0.0.1`, CloudGate
+resolves that to *its own* loopback. Nothing answers. The symptom is a tunnel
+that looks correctly configured sitting next to a daemon that looks dead —
+which is how people end up debugging the wrong machine for an hour.
+
+Both halves have to agree: `CCR_BIND_ADDR` in `/etc/claudecode-remote/.env`
+must name the same address that is registered in CloudGate.
+`register-host.sh` picks the Tailscale IP by default for exactly this reason,
+and warns when it has to fall back to loopback.
+
+The scheme is `http://`. TLS terminates at Cloudflare's edge; the daemon holds
+no certificate and speaks plaintext on an interface that is not public.
+
+---
+
 > **Status:** documented and scripted, **not connected** (Phase 6). `SETUP.md` and
 > `verify-tunnel.sh` exist; the latter is the Definition-of-Done check. Nothing is
 > live, because the domain (decision D-04) has not been chosen — and that choice
