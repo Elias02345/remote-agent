@@ -51,10 +51,11 @@ type OwnerConfig struct {
 	// TOTPSecret is the raw RFC 6238 secret from GenerateTOTPSecret. Empty
 	// leaves the TOTP factor permanently unsatisfiable.
 	TOTPSecret string
-	// WebAuthnRPID is the WebAuthn relying-party ID. D-04 (which domain)
-	// is still open per docs/ARCHITECTURE.md Section 12 — leave this
-	// empty until it is decided. See NewWebAuthnVerifier's doc comment for
-	// why no default may be invented here either.
+	// WebAuthnRPID is the WebAuthn relying-party ID. D-04: this is a
+	// per-installation value (CCR_PUBLIC_DOMAIN / --public-domain in
+	// daemon/cmd/claudecode-remoted), never a default this repo invents —
+	// leave it empty until the operator has actually set that. See
+	// NewWebAuthnVerifier's doc comment for why.
 	WebAuthnRPID        string
 	WebAuthnDisplayName string
 	WebAuthnOrigins     []string
@@ -311,8 +312,9 @@ func (o *Owner) handlePairPasskey(w http.ResponseWriter, r *http.Request) {
 		writeAuthError(w, http.StatusTooManyRequests, "too many failed attempts")
 		return
 	}
-	// No bypass, no dev flag: while WebAuthnRPID is unset (D-04 still
-	// open), o.passkeyVerifier.Verify always returns an error wrapping
+	// No bypass, no dev flag: while WebAuthnRPID is unset (CCR_PUBLIC_DOMAIN
+	// not yet configured for this installation, D-04), o.passkeyVerifier.Verify
+	// always returns an error wrapping
 	// ErrRelyingPartyNotConfigured (webauthn.go), so satisfyFactor's
 	// generic failure branch is all that can ever run here. That is
 	// correct and deliberate, not a gap to fill in later.

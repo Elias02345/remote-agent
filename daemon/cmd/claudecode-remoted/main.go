@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -66,6 +67,11 @@ func main() {
 		insecureNoAuth = flag.Bool("insecure-no-auth", false,
 			"DANGER: disable device authentication on /sessions and /files, for the xterm.js test client only. "+
 				"Refuses to start on a non-loopback bind address. Never the default.")
+
+		publicDomain = flag.String("public-domain", "",
+			"public domain this installation is reachable at (CCR_PUBLIC_DOMAIN in server-provisioning/.env.example). "+
+				"Used as the WebAuthn relying-party ID; the passkey pairing factor stays disabled while this is empty. "+
+				"Once a passkey is registered against it, changing this value invalidates every registered passkey.")
 	)
 	flag.Parse()
 
@@ -80,6 +86,13 @@ func main() {
 	// job, and it forwards to a local port.
 	if err := checkBindAddress(*addr); err != nil {
 		log.Fatalf("refusing to start: %v", err)
+	}
+
+	// A malformed --public-domain is worth catching now, not the first time
+	// a browser rejects a passkey ceremony against it. An IP in particular
+	// looks "configured" right up until WebAuthn refuses it outright.
+	if err := validatePublicDomain(*publicDomain); err != nil {
+		log.Fatalf("invalid --public-domain: %v", err)
 	}
 
 	if *insecureNoAuth {
@@ -135,6 +148,7 @@ func main() {
 		OwnerEmail:        *ownerEmail,
 		OwnerPasswordHash: *ownerPasswordHash,
 		OwnerTOTPSecret:   *ownerTOTPSecret,
+		PublicDomain:      *publicDomain,
 		InsecureNoAuth:    *insecureNoAuth,
 	})
 	if err != nil {
@@ -172,6 +186,11 @@ type routerConfig struct {
 	OwnerEmail        string
 	OwnerPasswordHash string
 	OwnerTOTPSecret   string
+	// PublicDomain is CCR_PUBLIC_DOMAIN / --public-domain. Empty leaves the
+	// passkey pairing factor unsatisfiable (identity.NewWebAuthnVerifier's
+	// fail-closed default) — see validatePublicDomain for the startup check
+	// that keeps a malformed value from reaching here at all.
+	PublicDomain string
 
 	InsecureNoAuth bool
 }
@@ -195,14 +214,25 @@ func newRouter(cfg routerConfig) (wiredRouter, error) {
 	deviceAuth := identity.NewDeviceAuthenticator(identityStore)
 	stepUpGate := identity.NewStepUpGate()
 	rateLimiter := identity.NewRateLimiter()
+
+	// WebAuthnRPID is left empty (identity.NewWebAuthnVerifier's fail-closed
+	// default) unless cfg.PublicDomain was set — D-04 is per-installation
+	// config now, not a value this repo may guess at. WebAuthnOrigins is
+	// derived from the same domain: CloudGate/Cloudflare terminates TLS at
+	// the edge (server-provisioning/cloudgate/SETUP.md), so the origin a
+	// browser actually sees is always https://<domain>, never the plaintext
+	// address the daemon binds to locally.
+	webAuthnOrigins := []string(nil)
+	if cfg.PublicDomain != "" {
+		webAuthnOrigins = []string{"https://" + cfg.PublicDomain}
+	}
 	owner := identity.NewOwner(identity.OwnerConfig{
-		Email:        cfg.OwnerEmail,
-		PasswordHash: cfg.OwnerPasswordHash,
-		TOTPSecret:   cfg.OwnerTOTPSecret,
-		// WebAuthnRPID intentionally left empty: D-04 (the relying-party
-		// domain) is still open (docs/ARCHITECTURE.md Section 12). The
-		// passkey pairing factor stays unsatisfiable until it is decided
-		// and wired up for real — no default, no bypass.
+		Email:               cfg.OwnerEmail,
+		PasswordHash:        cfg.OwnerPasswordHash,
+		TOTPSecret:          cfg.OwnerTOTPSecret,
+		WebAuthnRPID:        cfg.PublicDomain,
+		WebAuthnDisplayName: "ClaudeCode Remote",
+		WebAuthnOrigins:     webAuthnOrigins,
 	}, identityStore, rateLimiter)
 
 	wsTickets := newWSTicketStore()
@@ -470,6 +500,39 @@ func checkLoopbackOnly(addr string) error {
 		return nil
 	}
 	return fmt.Errorf("--insecure-no-auth requires a loopback bind address (127.0.0.1, ::1, or localhost), got %q", host)
+}
+
+// hostnameRE matches a bare DNS hostname: one or more dot-separated labels
+// (letters/digits/hyphens, not starting or ending with a hyphen) followed by
+// an alphabetic TLD. Deliberately requires at least one dot — a public
+// domain always has one — so a bare word like "localhost" is rejected here
+// too, not just IPs and URLs.
+var hostnameRE = regexp.MustCompile(`^(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,63}$`)
+
+// validatePublicDomain rejects anything that cannot serve as a WebAuthn
+// relying-party ID. Empty is fine — that is the fail-closed default that
+// keeps the passkey factor disabled (identity.NewWebAuthnVerifier). A
+// non-empty value must be a bare hostname: no scheme, no port, no path, and
+// never an IP address, since browsers reject an IP as an RP ID outright and
+// that is a miserable thing to discover only after someone believes they
+// have already configured it.
+func validatePublicDomain(domain string) error {
+	if domain == "" {
+		return nil
+	}
+	if strings.Contains(domain, "://") {
+		return fmt.Errorf("must be a bare hostname, not a URL: %q", domain)
+	}
+	if strings.ContainsAny(domain, "/:") {
+		return fmt.Errorf("must not contain a path or port: %q", domain)
+	}
+	if net.ParseIP(domain) != nil {
+		return fmt.Errorf("must be a domain name, not an IP address (WebAuthn relying-party IDs cannot be IPs): %q", domain)
+	}
+	if len(domain) > 253 || !hostnameRE.MatchString(domain) {
+		return fmt.Errorf("does not look like a valid hostname: %q", domain)
+	}
+	return nil
 }
 
 type bindError string

@@ -16,8 +16,8 @@ the open decisions made during the phase — only then the next phase.
 | 3 | Idle update system | done |
 | 4 | Terminal daemon MVP | done (visual DoD outstanding) |
 | 5 | Files & backups | done |
-| 6 | CloudGate connection | blocked on D-04 |
-| 7 | Security layer | done (passkey blocked on D-04) |
+| 6 | CloudGate connection | blocked on real deployment (D-04 resolved: `CCR_PUBLIC_DOMAIN` is now first-run config) |
+| 7 | Security layer | done (passkey inactive until the operator sets `CCR_PUBLIC_DOMAIN`) |
 | 8 | Client app skeleton | done |
 | 9 | Android & polish | done (Android glue outstanding) |
 
@@ -107,17 +107,24 @@ restic timer, file API endpoints including SHA-256 double-checking and
 **Definition of Done:** A deliberately aborted upload can be resumed, a
 tampered chunk is rejected, a restore test timer demonstrably runs through.
 
-## Phase 6 — CloudGate connection · `blocked on D-04`
+## Phase 6 — CloudGate connection · `blocked on real deployment`
 
 **Built:** `server-provisioning/cloudgate/SETUP.md` (host entries, tunnel mode,
-why the daemon needs no certificate) and `verify-tunnel.sh`, which is the
+why the daemon needs no certificate), `register-host.sh` (registers this
+service as a CloudGate host against the owner's already-running CloudGate
+instance, tunnel mode, idempotent) and `verify-tunnel.sh`, which is the
 Definition of Done check — it verifies a WebSocket upgrade survives the tunnel,
 which plain HTTPS success says nothing about. Also the fail-closed pairing state
 machine in `internal/identity`, so a half-finished Phase 7 cannot pair a device.
+`CCR_PUBLIC_DOMAIN` (`.env.example`) and `--public-domain` wire the domain into
+`identity.NewOwner`'s `WebAuthnRPID`, validated at startup as a bare hostname
+(never an IP, scheme, port or path) — see D-04 below.
 
 **Blocked:** the DoD requires a real domain, a running CloudGate and the real
-server. None exist yet. The domain (D-04) is the one piece nobody but the owner
-can supply, and choosing it wrong invalidates every passkey later.
+server. None exist yet in this dev environment — that is infrastructure only
+the owner can stand up, not a code gap. D-04 itself is no longer the blocker:
+it resolved to "every installation configures its own domain", which is now
+implemented.
 
 **Scope:** Documentation/script for host setup in CloudGate (tunnel mode),
 record the final subdomain decision, owner login portal skeleton per
@@ -127,18 +134,21 @@ decision D-05.
 subdomain over HTTPS; the WebSocket connection demonstrably works through
 the tunnel.
 
-**Blocker:** D-04 (domain) must be final before this — see `TODO_FOR_USER.md`.
+**Blocker:** a real domain configured via `CCR_PUBLIC_DOMAIN`, a running
+CloudGate instance and the real server — see `TODO_FOR_USER.md`.
 
-## Phase 7 — Security layer · `done (passkey blocked on D-04)`
+## Phase 7 — Security layer · `done (passkey inactive until CCR_PUBLIC_DOMAIN is set)`
 
 **Verified:** every package passes with `-race`. An unauthenticated request to
 `/sessions` or `/files` gets 401 and provably never reaches the handler; a
 device-signed one passes; revoking a device requires a fresh step-up grant;
 `--insecure-no-auth` refuses to start on anything but a loopback address.
 
-**Blocked, and correctly so:** the passkey factor cannot be satisfied while the
-relying-party domain is undecided, so a pairing cannot complete. That is the
-fail-closed behaviour the chain was built for, not a gap to work around.
+**Blocked, and correctly so, until the operator configures a domain:** the
+passkey factor cannot be satisfied while `CCR_PUBLIC_DOMAIN` is unset, so a
+pairing cannot complete. That is the fail-closed behaviour the chain was
+built for, not a gap to work around — and it is now a one-time config step
+per installation, not an open architecture question.
 
 **Scope:** Password (`Argon2id`) + TOTP + passkey pairing flow, `Ed25519`
 device auth, step-up auth for sensitive actions, rate limiting.
@@ -172,7 +182,7 @@ client-side half of the SHA-256 double check, and the share-to-session flow.
 because `flutter create` has never been run here and a hand-written Gradle
 project would be confidently wrong — the exact manifest and Kotlin glue are in
 `app/README.md` instead. FIDO2 hardware keys, because a passkey binds to a
-domain and D-04 is undecided. Client-side push, because ntfy already carries it
+domain and no installation has one configured yet (D-04). Client-side push, because ntfy already carries it
 server-side.
 
 **Scope:** Mobile control bar, native copy-paste UX, share-sheet integration
@@ -195,7 +205,7 @@ finished yet — exceptions: D-04 and D-05, see there.
 | D-01 | Mesh: Tailscale vs. own WireGuard | **Tailscale** (doc recommendation, NAT traversal + ACLs without building it ourselves) | Phase 1 | End of Phase 1 |
 | D-02 | Bare metal vs. Proxmox VM | **Provisioning stays agnostic** — the scripts run on both, snapshots are a pure operational benefit | Phase 1 | any time |
 | D-03 | `reboot-pending`: informational vs. automatic time window | **Purely informational** (ntfy push, manual reboot). No auto-reboot timer in Phase 3 | Phase 3 | any time, additively upgradable later |
-| D-04 | WebAuthn relying-party domain | **open — owner must decide.** Confirmed by the owner in Phase 0 that this stays deferred; Phases 1–5 are built domain-agnostic; the question is re-raised before Phase 6. | Phase 6/7 | **only before the passkey rollout.** A later change invalidates all passkeys |
+| D-04 | WebAuthn relying-party domain | **configured per installation, not decided once for the project.** This is a public project and every user has their own domain — the repo ships no default and never hardcodes one. Set via `CCR_PUBLIC_DOMAIN` (`server-provisioning/.env.example`), which the daemon takes as `--public-domain`, validates as a bare hostname at startup, and wires into `identity.NewOwner`'s `WebAuthnRPID`. Leaving it unset is fail-closed: the daemon still starts, the passkey factor just stays permanently unsatisfiable. Phases 1–5 were built domain-agnostic in anticipation of exactly this. | Phase 6/7 | **not project-wide revisable — it is per-installation config.** Within one installation, changeable only before that installation's first passkey rollout; a later change invalidates every passkey already registered on that install |
 | D-05 | Owner login: WebAuthn module in CloudGate vs. separate portal | **Separate portal** as a `/owner` route in the daemon (Section 10.2). Clean separation, CloudGate stays unchanged. **Confirmed by the owner in Phase 0** — no longer a default assumption. | Phase 6/7 | confirmed — reopen only on explicit request |
 | D-06 | Couple CloudGate self-update to the lock | **No.** The short `cloudflared` reload window is accepted; noted as a feature idea in the CloudGate repo, not a blocker here | — | any time |
 | D-07 | Full three-factor chain on every pairing | **Yes, without exception.** No reduced tier for "trusted networks" | Phase 7 | End of Phase 7 |

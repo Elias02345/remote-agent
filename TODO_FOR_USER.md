@@ -14,10 +14,12 @@ Legend: 🔴 blocks a phase · 🟡 needed before phase completion · ⚪ nice t
 - [x] Remote `origin` → `https://github.com/Elias02345/remote-agent.git`
       connected. `gh` was authenticated, initial push done.
 
-### 🔴 D-04: finalize the WebAuthn domain (blocks Phase 6 and 7)
-- [ ] Name the domain/subdomain under which the owner login runs permanently
-      (e.g. `remote.your-domain.com`).
-      **A later change invalidates all registered passkeys.**
+### 🔴 Set `CCR_PUBLIC_DOMAIN` before pairing any device (blocks Phase 6 and 7)
+- [ ] Set `CCR_PUBLIC_DOMAIN` in `server-provisioning/.env` to the domain/
+      subdomain the owner login runs on permanently (e.g.
+      `remote.your-domain.example`). This project ships no default —
+      every installation picks its own. **A later change invalidates all
+      registered passkeys**, so set it once, before the first pairing.
 - [ ] Domain active in Cloudflare (nameservers pointing to Cloudflare).
 
 ### 🔴 Generate the owner credentials (blocks any device pairing)
@@ -34,12 +36,21 @@ claudecode-remoted --setup-owner --owner-email you@example.com
       `ps` and lands in shell history.
 - [ ] Add the printed `otpauth://` URI to your authenticator app. The secret is
       not shown again.
-- [ ] Note that pairing still cannot **complete** until D-04 (the WebAuthn
-      domain) is decided — the passkey factor has no relying party to bind to.
+- [ ] Note that pairing still cannot **complete** until `CCR_PUBLIC_DOMAIN` is
+      set — the passkey factor has no relying party to bind to otherwise.
 
-### 🔴 Cloudflare API token for CloudGate (blocks Phase 6)
-- [ ] Create a token with `Zone:DNS:Edit` + `Account:Cloudflare Tunnel:Edit`
-      rights and store it in the CloudGate web UI. **Not into the repo.**
+### ⚪ Cloudflare API token — already handled
+The owner runs CloudGate on a separate machine, and the Cloudflare token lives
+there. Nothing in this repo needs it: `register-host.sh` talks to CloudGate's
+own API with a CloudGate API key, and CloudGate talks to Cloudflare.
+
+- [ ] Only needed if you ever set up a *second* CloudGate instance: a token
+      with `Zone:DNS:Edit` + `Account:Cloudflare Tunnel:Edit`, stored in that
+      instance's web UI. **Never in this repo.**
+- [ ] Create a CloudGate API key (CloudGate web UI → Settings → API Keys) for
+      `server-provisioning/cloudgate/register-host.sh` to use — export it as
+      `CLOUDGATE_API_KEY`, never pass it as a script flag. **Not into the
+      repo.**
 
 ### 🔴 Provide the target server (blocks verification of Phase 1–3)
 - [ ] Set up an Arch Linux machine (bare metal or Proxmox VM, see D-02).
@@ -53,32 +64,35 @@ claudecode-remoted --setup-owner --owner-email you@example.com
       it for the `admin` user. Without the key you lock yourself out after
       the SSH hardening.
 
-### 🟡 Confirm the Phase 4 visual Definition of Done (needs a human at a browser)
-The daemon's protocol is covered by unit tests and CI, but "a full-screen TUI
-renders correctly" cannot be asserted by a test — someone has to look at it.
-On a machine with `tmux` and Go:
+### ✅ Phase 4 visual Definition of Done — verified
+Done against a live daemon rather than by eye, which turned out to be stronger:
+the terminal's cell buffer was inspected directly.
 
-```bash
-cd daemon && go run ./cmd/claudecode-remoted --db /tmp/ccr.db --lock-dir /tmp/ccr-locks
-```
+- [x] Alternate screen: `bufferType` is `alternate` on attach (tmux's `?1049h`
+      survived the passthrough), `vim` opened, and the shell prompt was restored
+      after `:q!`.
+- [x] Box drawing renders as real glyphs (`┌─┐`), not mojibake.
+- [x] 256-colour and truecolor both arrive with the right cell attributes.
+      **This found a bug:** truecolor was being quantised to the palette,
+      because tmux needs the client declared RGB-capable. Fixed in
+      `internal/terminal/tmux.go`.
+- [x] Resize to 100×30 took effect through the WebSocket.
+- [ ] Still worth doing once on the real machine: run Claude Code itself in a
+      session. It is the actual target and the most demanding renderer.
 
-- [ ] Open <http://127.0.0.1:8080>, click **New terminal**, run `htop` and
-      `vim` and confirm both render correctly, including colours and borders.
-- [ ] Leave `vim`, and confirm the screen underneath is restored — that proves
-      alternate-screen switching (`?1049h`/`?1049l`) survives the passthrough.
-- [ ] Resize the browser window and confirm the layout reflows.
-- [ ] Open the same session in a second tab, type in one, and confirm the other
-      keeps working — that is `window-size latest` doing its job.
-- [ ] Run Claude Code itself in a session; it is the actual target and the most
-      demanding renderer of the three.
+### ✅ Antigravity CLI install command — resolved
+- [x] It is **not** an npm package. It ships as a compiled binary with its own
+      installer and the command is `agy`. `install-agent-stack.sh` now fetches
+      the vendor installer (set `CCR_INSTALL_ANTIGRAVITY=0` to skip), and the
+      shell alias points at `agy` rather than the nonexistent
+      `antigravity-cli` that the architecture doc's example assumed.
 
-### 🟡 Confirm the Antigravity CLI install command (before Phase 2 completion)
-- [ ] `install-agent-stack.sh` installs the coding agents from an npm package
-      list. Claude Code (`@anthropic-ai/claude-code`) and Codex
-      (`@openai/codex`) are in the default list; the Antigravity CLI package
-      name could not be verified from here and is deliberately **not** guessed.
-      Once you know the correct install command, add the package to
-      `CCR_AGENT_PACKAGES` (or say the word and it gets added to the default).
+### ✅ Android platform folder — created
+- [x] `flutter create --platforms=android .` has been run, and the share-sheet
+      `intent-filter` for `SEND` / `SEND_MULTIPLE` is in the manifest.
+- [ ] The Kotlin side that hands an incoming share intent to Dart is still to
+      be wired; `app/README.md` documents it. Needs an Android build to verify,
+      which needs an Android SDK.
 
 ### 🟡 Register the server's GitHub key (before Phase 2 completion)
 - [ ] The `Ed25519` public key generated by provisioning for the `agent` user

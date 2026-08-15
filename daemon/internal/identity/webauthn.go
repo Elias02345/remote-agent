@@ -11,7 +11,7 @@ import (
 
 // ErrRelyingPartyNotConfigured is returned by WebAuthnVerifier when the
 // relying-party ID has not been set.
-var ErrRelyingPartyNotConfigured = errors.New("webauthn relying party ID is not configured (D-04 undecided, see docs/ARCHITECTURE.md Section 12)")
+var ErrRelyingPartyNotConfigured = errors.New("webauthn relying party ID is not configured (CCR_PUBLIC_DOMAIN / --public-domain unset for this installation, see D-04 in ROADMAP.md)")
 
 // ErrPasskeyNotBound is returned by Verify when BindSession has not yet
 // attached a user and challenge for the current pairing attempt.
@@ -36,13 +36,15 @@ type WebAuthnVerifier struct {
 // rpID and origins must be supplied explicitly, and this constructor must
 // never invent a default (not the daemon's Tailscale name, not
 // "localhost") when rpID is empty. Which domain is the WebAuthn relying
-// party is Decision D-04 in docs/ARCHITECTURE.md Section 12, and it is
-// still open — a guessed default here could end up live in production, and
-// per the paragraph below, a live RP ID cannot be quietly swapped out
-// later. With an empty rpID, Configured reports false and every other
-// method returns an error wrapping ErrRelyingPartyNotConfigured (and
-// ErrFactorNotImplemented), so the passkey factor stays unsatisfiable —
-// and pairing therefore stays impossible — until D-04 is actually decided.
+// party is Decision D-04 in docs/ARCHITECTURE.md Section 12: every
+// installation supplies its own via CCR_PUBLIC_DOMAIN / --public-domain,
+// and this repo ships no default — a guessed one here could end up live in
+// production, and per the paragraph below, a live RP ID cannot be quietly
+// swapped out later. With an empty rpID (the operator hasn't set that yet),
+// Configured reports false and every other method returns an error
+// wrapping ErrRelyingPartyNotConfigured (and ErrFactorNotImplemented), so
+// the passkey factor stays unsatisfiable — and pairing therefore stays
+// impossible — until the domain is actually configured.
 //
 // Once real passkeys have been registered against an RP ID, that ID must
 // never change: WebAuthn credentials are cryptographically bound to the RP

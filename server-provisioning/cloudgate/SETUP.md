@@ -3,9 +3,11 @@
 How ClaudeCode Remote becomes reachable from the internet, per architecture
 Section 9.
 
-> **Status: not completed.** The steps below are written and the verification
-> script exists, but the domain (decision D-04) has not been chosen yet, so
-> nothing has actually been wired up. See `TODO_FOR_USER.md`.
+> **Status: automatable, per-installation.** The domain (decision D-04) is no
+> longer something the project waits on — every installation configures its
+> own via `CCR_PUBLIC_DOMAIN` (see `.env.example`), and `register-host.sh`
+> automates the CloudGate side described below instead of clicking through
+> the web UI by hand. See `TODO_FOR_USER.md` for the one-time setup steps.
 
 ## What this does and does not build
 
@@ -20,20 +22,40 @@ server holds an *outbound* connection open.
 
 ## Before you start
 
-- [ ] **Decide the domain, once.** WebAuthn binds every passkey to a
-      relying-party ID, which must be a domain and never an IP. Changing it
-      later invalidates every registered passkey. This is decision D-04 and it
-      blocks the rest of this page.
+- [ ] **Set `CCR_PUBLIC_DOMAIN`, once, in `server-provisioning/.env`.**
+      WebAuthn binds every passkey to this value as its relying-party ID,
+      which must be a real domain and never an IP. Changing it later
+      invalidates every registered passkey. This project ships no default —
+      it is decision D-04, and it is per-installation, not a value anyone
+      else can pick for you.
 - [ ] Domain active in Cloudflare (nameservers pointing at Cloudflare).
 - [ ] Cloudflare API token with `Zone:DNS:Edit` and
       `Account:Cloudflare Tunnel:Edit`, stored in the CloudGate web UI. **Not
       in this repo.**
-- [ ] CloudGate running on the same machine as the daemon.
+- [ ] CloudGate running (the owner's existing instance) with a cloudflared
+      tunnel and the zone for your domain already added — `register-host.sh`
+      registers *this* service as a host against them, it does not create the
+      tunnel or the Cloudflare account.
 
 ## Host entries
 
-Add these in the CloudGate web UI. **Tunnel mode, not the local nginx mode** —
-the nginx mode assumes a reachable public IP, which CGNAT denies.
+`register-host.sh` automates this against CloudGate's real API (`/api/hosts`,
+`/api/tunnels`, `/api/cloudflare/accounts`) — see its header comment for the
+exact endpoints. It is idempotent: re-running it updates the existing host
+instead of creating a duplicate.
+
+```bash
+CLOUDGATE_API_KEY=cgk_... bash server-provisioning/cloudgate/register-host.sh \
+  https://your-cloudgate-instance remote.your-domain.example 127.0.0.1:8080
+```
+
+`CLOUDGATE_API_KEY` comes from the CloudGate web UI (Settings > API Keys) and
+must stay out of shell history / process listings — that is why the script
+only accepts it as an environment variable, never a flag.
+
+If you would rather do it by hand, add the same host in the CloudGate web UI.
+**Tunnel mode, not the local nginx mode** — the nginx mode assumes a reachable
+public IP, which CGNAT denies.
 
 | Subdomain | Internal target | Purpose |
 |---|---|---|

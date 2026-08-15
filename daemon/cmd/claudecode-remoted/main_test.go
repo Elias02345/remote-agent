@@ -67,6 +67,50 @@ func TestCheckLoopbackOnlyRejectsNonLoopback(t *testing.T) {
 	}
 }
 
+// Empty is the fail-closed default (D-04: no domain configured yet), and
+// must stay accepted — it is what keeps the passkey factor disabled instead
+// of refusing to start.
+func TestValidatePublicDomainAcceptsEmpty(t *testing.T) {
+	if err := validatePublicDomain(""); err != nil {
+		t.Errorf("validatePublicDomain(\"\") = %v, want nil", err)
+	}
+}
+
+func TestValidatePublicDomainAcceptsRealHostnames(t *testing.T) {
+	good := []string{"remote.example.com", "a.b.example.co.uk", "sub-domain.example.com"}
+	for _, d := range good {
+		if err := validatePublicDomain(d); err != nil {
+			t.Errorf("validatePublicDomain(%q) = %v, want nil", d, err)
+		}
+	}
+}
+
+// An IP "looks configured" right up until a browser refuses it as a WebAuthn
+// RP ID — this must be caught at startup instead, with both v4 and v6 forms.
+func TestValidatePublicDomainRejectsIPs(t *testing.T) {
+	bad := []string{"127.0.0.1", "203.0.113.7", "::1", "2001:db8::1"}
+	for _, d := range bad {
+		if err := validatePublicDomain(d); err == nil {
+			t.Errorf("validatePublicDomain(%q) = nil, want an error (IP address)", d)
+		}
+	}
+}
+
+func TestValidatePublicDomainRejectsSchemesPortsAndPaths(t *testing.T) {
+	bad := []string{
+		"https://remote.example.com",
+		"remote.example.com:8443",
+		"remote.example.com/owner",
+		"localhost",
+		"not a hostname",
+	}
+	for _, d := range bad {
+		if err := validatePublicDomain(d); err == nil {
+			t.Errorf("validatePublicDomain(%q) = nil, want an error", d)
+		}
+	}
+}
+
 // --- newRouter integration tests -------------------------------------------
 
 // testRouter builds the same wiring main() does, against a temporary
