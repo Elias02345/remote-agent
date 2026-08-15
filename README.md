@@ -68,4 +68,5 @@ repo builds **no** own relay infrastructure.
 
 ## License
 
-Not yet decided.
+[MIT](LICENSE) — permissive, no copyleft, compatible with the Go, Flutter and
+Dart ecosystems this depends on, and the same licence as CloudGate.

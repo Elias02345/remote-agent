@@ -9,26 +9,46 @@ Type=simple
 User=agent
 Group=agent
 
+# Defaults first, then the operator's file, so .env overrides these rather than
+# the other way round. systemd applies Environment= and EnvironmentFile= in the
+# order they appear.
+#
+# CCR_BIND_ADDR matters more than it looks. Loopback is right only when
+# CloudGate runs on this same machine. CloudGate normally runs elsewhere, and
+# from there 127.0.0.1 is CloudGate's own host — it can never reach this
+# daemon. In that topology this must be an address CloudGate can actually
+# connect to, which is the Tailscale IP. The daemon refuses a wildcard bind
+# either way.
+Environment=CCR_BIND_ADDR=127.0.0.1:8080
+Environment=CCR_PUBLIC_DOMAIN=
+Environment=CCR_OWNER_EMAIL=
+Environment=CCR_OWNER_PASSWORD_HASH=
+Environment=CCR_OWNER_TOTP_SECRET=
+
 # Secrets and per-installation configuration live here, never in this unit and
 # never on the command line: a flag value is visible to every local user in the
-# process table. CCR_PUBLIC_DOMAIN, CCR_OWNER_* and NTFY_URL all come from it.
-# The leading '-' means a missing file is not fatal — the daemon is fail-closed
-# without those values rather than refusing to boot.
+# process table. The leading '-' means a missing file is not fatal — the daemon
+# is fail-closed without those values rather than refusing to boot.
 EnvironmentFile=-/etc/claudecode-remote/.env
 
-# The bind address stays loopback. Public reachability is CloudGate's job and it
-# forwards to a local port; the daemon refuses a wildcard bind outright, so this
-# is defence in depth rather than the only guard.
+# Every flag uses the --flag=${VAR} form, never --flag ${VAR}.
+#
+# systemd expands an unset or empty variable to *zero words*, so the space form
+# would hand the next argument to the previous flag: with no domain configured,
+# `--public-domain ${CCR_PUBLIC_DOMAIN} --owner-email ...` reaches the daemon as
+# `--public-domain=--owner-email`. The equals form yields `--public-domain=`,
+# an honest empty value. Unset is the default state of a fresh install, so this
+# is the normal path, not an edge case.
 ExecStart=/usr/local/bin/claudecode-remoted \
-    --addr 127.0.0.1:8080 \
-    --db /var/lib/claudecode-remote/daemon.db \
-    --lock-dir /run/claudecode-locks \
-    --file-roots /srv/exchange \
-    --upload-dir /var/lib/claudecode-remote/uploads \
-    --public-domain ${CCR_PUBLIC_DOMAIN} \
-    --owner-email ${CCR_OWNER_EMAIL} \
-    --owner-password-hash ${CCR_OWNER_PASSWORD_HASH} \
-    --owner-totp-secret ${CCR_OWNER_TOTP_SECRET}
+    --addr=${CCR_BIND_ADDR} \
+    --db=/var/lib/claudecode-remote/daemon.db \
+    --lock-dir=/run/claudecode-locks \
+    --file-roots=/srv/exchange \
+    --upload-dir=/var/lib/claudecode-remote/uploads \
+    --public-domain=${CCR_PUBLIC_DOMAIN} \
+    --owner-email=${CCR_OWNER_EMAIL} \
+    --owner-password-hash=${CCR_OWNER_PASSWORD_HASH} \
+    --owner-totp-secret=${CCR_OWNER_TOTP_SECRET}
 
 Restart=always
 RestartSec=5

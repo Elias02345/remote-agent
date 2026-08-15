@@ -14,8 +14,21 @@
 # Usage:
 #   CLOUDGATE_API_KEY=cgk_... bash register-host.sh <cloudgate-base-url> <public-domain> [internal-target]
 #
-# internal-target defaults to 127.0.0.1:8080 (docs/ARCHITECTURE.md Section 9:
-# the daemon binds locally; CloudGate/cloudflared does the forwarding).
+# internal-target is the address CloudGate itself will connect to, and this is
+# the part that is easy to get wrong. It is resolved from CloudGate's point of
+# view, not from this machine's:
+#
+#   * CloudGate on THIS machine  -> 127.0.0.1:8080 is correct.
+#   * CloudGate on ANOTHER machine (the normal case) -> 127.0.0.1 is CloudGate's
+#     own loopback and can never reach this daemon. It must be an address of
+#     this machine that CloudGate can route to: the Tailscale IP, or a LAN IP.
+#
+# When omitted, this script uses the Tailscale IP if there is one, because that
+# is the address the architecture expects a remote CloudGate to use. It falls
+# back to loopback only when no Tailscale interface exists, and says so.
+#
+# The daemon speaks plain HTTP — TLS terminates at Cloudflare's edge — so the
+# CloudGate entry is http://, never https://.
 #
 # Environment:
 #   CLOUDGATE_API_KEY      required. A CloudGate API key (web UI: Settings >
@@ -36,11 +49,31 @@ source "$SCRIPT_DIR/../lib/common.sh"
 
 CLOUDGATE_URL="${1:-}"
 DOMAIN="${2:-}"
-TARGET="${3:-127.0.0.1:8080}"
 API_KEY="${CLOUDGATE_API_KEY:-}"
+CCR_PORT="${CCR_PORT:-8080}"
+
+# default_target — the address CloudGate should forward to, chosen from
+# CloudGate's perspective rather than this machine's. See the header comment.
+default_target() {
+  local ts_ip=""
+  if command_exists tailscale; then
+    ts_ip="$(tailscale ip -4 2>/dev/null | head -n1 || true)"
+  fi
+  if [[ -z "$ts_ip" ]] && command_exists ip; then
+    ts_ip="$(ip -4 -o addr show dev tailscale0 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | head -n1 || true)"
+  fi
+
+  if [[ -n "$ts_ip" ]]; then
+    printf '%s:%s' "$ts_ip" "$CCR_PORT"
+  else
+    printf '127.0.0.1:%s' "$CCR_PORT"
+  fi
+}
+
+TARGET="${3:-$(default_target)}"
 
 if [[ -z "$CLOUDGATE_URL" || -z "$DOMAIN" ]]; then
-  fail "Usage: $0 <cloudgate-base-url> <public-domain> [internal-target]  (internal-target defaults to 127.0.0.1:8080). CLOUDGATE_API_KEY must be set in the environment."
+  fail "Usage: $0 <cloudgate-base-url> <public-domain> [internal-target]  (internal-target defaults to this machine's Tailscale IP, or loopback if there is none). CLOUDGATE_API_KEY must be set in the environment."
 fi
 if [[ -z "$API_KEY" ]]; then
   fail "CLOUDGATE_API_KEY is not set. Create a key in the CloudGate web UI (Settings > API Keys) and export it — never pass it as a flag."
@@ -58,6 +91,19 @@ TARGET_HOST="${TARGET%:*}"
 TARGET_PORT="${TARGET##*:}"
 if [[ "$TARGET_HOST" == "$TARGET" || ! "$TARGET_PORT" =~ ^[1-9][0-9]{0,4}$ ]]; then
   fail "internal-target must be host:port with a numeric port, got '${TARGET}'"
+fi
+
+# Loopback is right only when CloudGate runs on this same machine. It is worth
+# a loud warning rather than a silent success, because the failure it causes —
+# CloudGate reaching its own loopback and getting nothing — looks like a broken
+# tunnel or a dead daemon, and sends people debugging in the wrong place.
+if [[ "$TARGET_HOST" == "127.0.0.1" || "$TARGET_HOST" == "localhost" || "$TARGET_HOST" == "::1" ]]; then
+  warn "internal-target is loopback (${TARGET})."
+  warn "That only works if CloudGate runs on THIS machine. If it runs elsewhere,"
+  warn "pass this machine's Tailscale or LAN IP instead — from CloudGate's side,"
+  warn "127.0.0.1 is CloudGate's own host and will never reach this daemon."
+  warn "The daemon must also bind there: set CCR_BIND_ADDR in"
+  warn "/etc/claudecode-remote/.env and restart claudecode-remoted."
 fi
 
 # --- API helper --------------------------------------------------------------

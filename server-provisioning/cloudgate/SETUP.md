@@ -37,6 +37,30 @@ server holds an *outbound* connection open.
       registers *this* service as a host against them, it does not create the
       tunnel or the Cloudflare account.
 
+## Where CloudGate runs decides the target address
+
+This is the one thing that is easy to get wrong, because the address is
+resolved **from CloudGate's point of view**, not from the agent machine's.
+
+| CloudGate runs… | Target in the host entry | Daemon must bind to |
+|---|---|---|
+| on the same machine | `http://127.0.0.1:8080` | `127.0.0.1:8080` (default) |
+| **on another machine** (the usual case) | `http://<this machine's Tailscale or LAN IP>:8080` | that same address |
+
+If CloudGate is elsewhere and the entry says `127.0.0.1`, CloudGate resolves
+that to **its own** loopback and never reaches the daemon. The symptom is a
+tunnel that looks configured and a service that looks dead, which sends people
+debugging the wrong box.
+
+Both halves have to agree: set `CCR_BIND_ADDR` in
+`/etc/claudecode-remote/.env` to the same address you register, and restart
+`claudecode-remoted`. The daemon refuses a wildcard bind, so `0.0.0.0` is not
+an option — it has no authentication in front of it beyond device pairing, and
+binding it to everything would expose it on every interface the machine has.
+
+The scheme is **`http://`**, not `https://`. TLS terminates at Cloudflare's
+edge; the daemon speaks plaintext and holds no certificate.
+
 ## Host entries
 
 `register-host.sh` automates this against CloudGate's real API (`/api/hosts`,
