@@ -25,13 +25,22 @@ the open decisions made during the phase — only then the next phase.
 
 ## Phase 1 — Server foundation · `done`
 
-**Verified:** the container harness runs `provision.sh` twice inside one Arch
-container and passes 30 of 30 assertions in CI, including `sshd -t` against the
-hardened config and exactly one active `Port` / `AllowUsers` /
-`PasswordAuthentication` line after both runs. `shellcheck -x` and `bash -n` are
-clean across the repo. **Not** covered, because no real machine exists yet: an
-actual sshd restart under systemd, fail2ban banning a real client, and Tailscale
-bringing up an interface.
+**Verified:** the plain (non-systemd) container harness runs `provision.sh`
+twice inside one Arch container and passes 30 of 30 assertions in CI,
+including `sshd -t` against the hardened config and exactly one active
+`Port` / `AllowUsers` / `PasswordAuthentication` line after both runs.
+`shellcheck -x` and `bash -n` are clean across the repo. The systemd
+container harness added later (`server-provisioning/test/run-e2e-tests.sh`)
+closes one more real gap: it boots systemd as PID 1 and asserts
+`sshd` is **active**, not just correctly configured — the first time this
+repo has actually started sshd under an init system rather than only
+validating its config file. **Still not** covered, because a privileged
+container is not a machine: fail2ban actually banning a real remote client
+(its sshd jail depends on `iptables`, which nothing in
+`server-provisioning/` installs — see `run-e2e-tests.sh`'s header for the
+open question this leaves), and Tailscale bringing up a real interface
+(`CCR_SKIP_TAILSCALE=1` in every harness, container or not, since Tailscale
+cannot come up in a container at all).
 
 
 **Scope:** `server-provisioning/` — SSH hardening (keys only, port 2222,
@@ -62,9 +71,23 @@ three symlinks; Git hooks trigger it automatically on checkout/merge.
 
 ## Phase 3 — Idle update system · `done`
 
-**Verified:** 21 of 21 assertions green in CI, including the asymmetry the design
-rests on — a stale agent lock is cleaned after 6 h, a stale terminal lock is not,
-and a surviving terminal lock still blocks the update.
+**Verified:** 21 of 21 assertions green in CI (plain container harness, no
+systemd), including the asymmetry the design rests on — a stale agent lock is
+cleaned after 6 h, a stale terminal lock is not, and a surviving terminal lock
+still blocks the update. The systemd container harness
+(`run-e2e-tests.sh`) closes the gap this phase originally shipped with
+unverified: `idle-updater.timer` is proven **enabled** by a real systemd, not
+merely installed, and `systemctl start idle-updater.service` proves the
+oneshot unit **runs to completion** — its journal is read back afterward and
+must contain both the idle decision line and confirmation that
+`CCR_SKIP_PACKAGE_UPDATES` actually reached the unit's environment via
+`EnvironmentFile=`, which is the mechanism, not the timer, that this whole
+phase depends on working. **Still not** covered, because a privileged
+container is not a machine: the timer's own `OnBootSec=5min` /
+`OnUnitActiveSec=30min` schedule actually elapsing on its own (the harness
+calls `systemctl start` directly instead of waiting for it), a real
+`pacman -Syu` (skipped everywhere via `CCR_SKIP_PACKAGE_UPDATES=1`), and a
+real reboot.
 
 **Scope:** `agent-run` wrapper, lock-directory logic (both lock types tested
 separately), systemd timer, ntfy integration.
@@ -95,10 +118,25 @@ alternate-screen switching and resize.
 
 ## Phase 5 — Files & backups · `done`
 
-**Verified:** 20 of 20 provisioning assertions plus the Go test suite. The
-harness runs `testparm` against the generated `smb.conf` and performs a real
-restic backup and restore, comparing the restored bytes against the source. The
-upload path is covered by resume, offset-conflict and tampered-content tests.
+**Verified:** 20 of 20 provisioning assertions (plain container harness) plus
+the Go test suite. That harness runs `testparm` against the generated
+`smb.conf` and performs a real restic backup and restore, comparing the
+restored bytes against the source; the upload path is covered by resume,
+offset-conflict and tampered-content tests. The systemd container harness
+(`run-e2e-tests.sh`) adds three things no earlier harness could: it proves
+`claudecode-backup.timer` is **enabled** by a real systemd, that
+`systemctl start claudecode-backup.service` **runs to completion**, and that
+a real restic snapshot exists afterward — not merely that the script
+exited 0. It also builds and runs the daemon itself under that same
+systemd and drives one full session lifecycle over its REST API end to end:
+create → a real `tmux` session appears → a `terminal-*` lock file appears →
+delete → both disappear again. No earlier harness in this repo ever ran the
+daemon against a real `tmux`. **Still not** covered, because a privileged
+container is not a machine: Samba actually binding to a live `tailscale0`
+interface and being reachable by a real SMB client — `tailscale0` never
+exists in any harness (`CCR_SKIP_TAILSCALE=1`), so only `lo` has ever been
+proven — and `claudecode-restore-test.timer`'s monthly schedule actually
+elapsing on real hardware.
 
 **Scope:** Samba configuration (`backups`/`exchange`, Tailscale-only),
 restic timer, file API endpoints including SHA-256 double-checking and

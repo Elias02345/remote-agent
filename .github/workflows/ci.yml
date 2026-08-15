@@ -103,6 +103,25 @@ jobs:
       - name: Run backup harness
         run: bash server-provisioning/test/run-backup-tests.sh
 
+  # Additional to the four harnesses above, not a replacement for any of
+  # them: this is the only job that boots systemd as PID 1, so it is the
+  # only place a unit gets enabled AND started, a oneshot service runs to
+  # completion via `systemctl start`, and its journal gets read back. It is
+  # also the slowest job in this workflow by a wide margin -- a privileged
+  # container boot, a full four-script install chain run twice, and a Go
+  # build, all in series -- so it stays gated behind `needs: shellcheck`
+  # like the others rather than running unconditionally.
+  e2e-harness:
+    name: End-to-end systemd container harness
+    needs: shellcheck
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Run e2e harness
+        run: bash server-provisioning/test/run-e2e-tests.sh
+
   app:
     name: Flutter analyze and test
     runs-on: ubuntu-latest

@@ -1,0 +1,39 @@
+# server-provisioning/test/Containerfile.systemd
+#
+# Arch image that boots systemd as PID 1, so run-e2e-tests.sh can exercise the
+# half of every phase the other harnesses honestly admit they can't: units
+# actually enabled and started by systemd, a oneshot service run to
+# completion via `systemctl start`, and its journal read back afterward.
+#
+# The plain Containerfile stays untouched on purpose (see its own header) --
+# the "systemd not usable as init" code path it exercises still matters and
+# this image does not replace it, it covers the other half.
+#
+# provision.sh and the three install-*.sh scripts install their own runtime
+# packages (openssh, sudo, fail2ban, samba, restic, nodejs, npm...) via
+# pacman at run time, same as the plain Containerfile -- this image only adds
+# what is needed to (a) boot systemd at all and (b) build/run/exercise the
+# daemon from outside server-provisioning/, neither of which is itself under
+# test here:
+#   - systemd: PID 1, the entire point of this image.
+#   - go: builds daemon/ inside the container. CGO_ENABLED=0 at build time,
+#     so no C toolchain is needed here -- modernc.org/sqlite is pure Go.
+#   - tmux: the daemon shells out to `tmux new-session` / `attach-session`
+#     (docs/ARCHITECTURE.md Section 5.1). Nothing under server-provisioning/
+#     installs it today -- that gap is real on actual hardware too, not just
+#     here -- so the e2e harness installs it itself, as harness tooling,
+#     exactly like `git` and `openssl` in the plain Containerfile.
+#   - curl: health-checks the daemon's HTTP API from inside the container.
+FROM archlinux:base
+
+# ponytail: same signature-checking tradeoff as the plain Containerfile --
+# this is a throwaway image rebuilt from a fresh archlinux:base on every run,
+# not a deployed system.
+RUN sed -i 's/^#\?SigLevel.*/SigLevel = Never/' /etc/pacman.conf \
+    && pacman -Sy --noconfirm --needed systemd curl go tmux
+
+# `docker/podman stop` sends this; systemd shuts itself down cleanly on it
+# instead of being SIGTERM'd mid-boot like an ordinary process would be.
+STOPSIGNAL SIGRTMIN+3
+
+CMD ["/usr/lib/systemd/systemd"]
