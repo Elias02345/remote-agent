@@ -1,8 +1,27 @@
+<!--
+  Two attributes on <application> below are security decisions, not defaults.
+
+  allowBackup="false" / fullBackupContent="false": this app holds the device's
+  Ed25519 private key. It lives in the Android Keystore, which is not backed up,
+  but anything else the app persists would otherwise be copied into the user's
+  cloud backup and restored onto a different phone. A paired device identity is
+  exactly the thing that must not be restorable somewhere else.
+
+  usesCleartextTraffic="false": the daemon speaks plaintext HTTP, but the mobile
+  client reaches it through CloudGate over HTTPS, where TLS terminates at
+  Cloudflare's edge. Direct plaintext to a Tailscale IP is a desktop and
+  development path — inside WireGuard it is not actually exposed, but Android
+  cannot express "only inside the tailnet", and a blanket cleartext permit to
+  buy that would also permit it everywhere else. See app/README.md.
+-->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <application
         android:label="claudecode_remote"
         android:name="${applicationName}"
-        android:icon="@mipmap/ic_launcher">
+        android:icon="@mipmap/ic_launcher"
+        android:allowBackup="false"
+        android:fullBackupContent="false"
+        android:usesCleartextTraffic="false">
         <activity
             android:name=".MainActivity"
             android:exported="true"

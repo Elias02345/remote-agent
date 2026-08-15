@@ -14,6 +14,11 @@ require_root
 CCR_AGENT_USER="${CCR_AGENT_USER:-agent}"
 CCR_TAILSCALE_IFACE="${CCR_TAILSCALE_IFACE:-tailscale0}"
 CCR_SMB_USER="${CCR_SMB_USER:-$CCR_AGENT_USER}"
+
+# All three are interpolated into smb.conf; validate before writing it.
+require_valid_name CCR_AGENT_USER "$CCR_AGENT_USER"
+require_valid_name CCR_SMB_USER "$CCR_SMB_USER"
+require_valid_name CCR_TAILSCALE_IFACE "$CCR_TAILSCALE_IFACE"
 CCR_SKIP_SAMBA="${CCR_SKIP_SAMBA:-0}"
 SECRETS_DIR="/etc/claudecode-remote"
 RESTIC_PASSWORD_FILE="${SECRETS_DIR}/restic-password"

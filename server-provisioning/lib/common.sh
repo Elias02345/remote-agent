@@ -30,6 +30,29 @@ command_exists() {
   command -v "$1" >/dev/null 2>&1
 }
 
+# require_valid_name <var-name> <value> — refuses anything that is not a plain
+# POSIX-ish identifier.
+#
+# These values are not merely used, they are *interpolated into config files
+# that grant privilege*: usernames land in /etc/sudoers.d entries, the interface
+# name lands in smb.conf. A value containing a newline would inject a second,
+# syntactically valid line — and `visudo -cf` would happily accept
+#
+#     agent ALL=(root) NOPASSWD: /usr/bin/systemctl restart claudecode-remoted
+#     eve ALL=(ALL) NOPASSWD: ALL
+#
+# as a correct sudoers file, because it is one. Validation has to happen before
+# the value is written, not after.
+#
+# These come from a root-owned .env today, so this is defence in depth rather
+# than a live hole. It costs three lines.
+require_valid_name() {
+  local var="$1" value="$2"
+  if [[ ! "$value" =~ ^[a-z_][a-z0-9_-]{0,31}$ ]]; then
+    fail "${var} must be a plain name matching ^[a-z_][a-z0-9_-]{0,31}\$, got: '${value}'"
+  fi
+}
+
 # has_systemd — true only when systemd is actually usable as init.
 # /run/systemd/system only exists when systemd is PID 1, so this correctly
 # takes the false branch inside containers that have systemd installed but

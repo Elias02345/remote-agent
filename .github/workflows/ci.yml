@@ -191,3 +191,13 @@ jobs:
 
       - name: Build
         run: go build ./...
+
+      # Catches the case that started this: the toolchain was pinned to a patch
+      # release with 27 known vulnerabilities reachable from this code,
+      # including request smuggling in net/http, and nothing in CI noticed for
+      # weeks. Runs on every push so a dependency going bad is a red build
+      # rather than something found by hand months later.
+      - name: Vulnerability scan
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          "$(go env GOPATH)/bin/govulncheck" ./...

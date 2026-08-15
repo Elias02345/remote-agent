@@ -140,6 +140,25 @@ run_case out2 rc2 "$RUNTIME" run --rm -e "CCR_ADMIN_PUBKEY=${RSA_KEY}" -v "${PRO
 # shellcheck disable=SC2154
 assert_fails "run with an ssh-rsa key exits non-zero (Ed25519 only)" "$rc2"
 
+# The usernames are interpolated straight into /etc/sudoers.d entries. A value
+# carrying a newline would append a second, syntactically valid rule -- and
+# `visudo -cf` would accept it, because it *is* valid sudoers. The guard has to
+# run before the file is written, so this asserts through the real entry point
+# rather than unit-testing the validator in isolation.
+run_case out_inject rc_inject "$RUNTIME" run --rm \
+  -e "CCR_ADMIN_PUBKEY=${DUMMY_KEY}" \
+  -e "$(printf 'CCR_AGENT_USER=agent\nroot ALL=(ALL) NOPASSWD: ALL')" \
+  -v "${PROV_DIR}:/repo:ro" "$IMAGE_TAG" bash /repo/provision.sh
+# shellcheck disable=SC2154
+assert_fails "a username carrying a newline is refused before sudoers is written" "$rc_inject"
+
+run_case out_space rc_space "$RUNTIME" run --rm \
+  -e "CCR_ADMIN_PUBKEY=${DUMMY_KEY}" \
+  -e "CCR_AGENT_USER=eve ALL=(ALL) NOPASSWD: ALL" \
+  -v "${PROV_DIR}:/repo:ro" "$IMAGE_TAG" bash /repo/provision.sh
+# shellcheck disable=SC2154
+assert_fails "a username containing a sudoers rule is refused" "$rc_space"
+
 # CCR_ADMIN_PASSWORD_HASH must be a crypt hash, never a plaintext password --
 # usermod -p writes the value verbatim into /etc/shadow, so accepting
 # plaintext here would store and use it as the literal (broken) hash.

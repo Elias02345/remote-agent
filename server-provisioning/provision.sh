@@ -43,6 +43,10 @@ fi
 
 CCR_ADMIN_USER="${CCR_ADMIN_USER:-admin}"
 CCR_AGENT_USER="${CCR_AGENT_USER:-agent}"
+
+# Validated before anything interpolates them into sudoers or sshd_config.
+require_valid_name CCR_ADMIN_USER "$CCR_ADMIN_USER"
+require_valid_name CCR_AGENT_USER "$CCR_AGENT_USER"
 CCR_SSH_PORT="${CCR_SSH_PORT:-2222}"
 CCR_TAILSCALE_AUTHKEY="${CCR_TAILSCALE_AUTHKEY:-}"
 CCR_SKIP_TAILSCALE="${CCR_SKIP_TAILSCALE:-0}"
