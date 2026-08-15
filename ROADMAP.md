@@ -198,10 +198,18 @@ prompt.
 
 ## Phase 8 — Client app skeleton · `done`
 
-**Verified:** `flutter analyze` clean and 36 tests green, locally and in CI. The
-one that matters most splits a box-drawing character across two WebSocket frames
-and asserts it survives — decoding each chunk on its own turns both halves into
-U+FFFD and draws mojibake exactly where TUI frame lines are.
+**Verified:** `flutter analyze` clean and 45 tests green, locally and in CI,
+and every platform target actually built in CI — web and Linux on the Ubuntu
+runner, Windows on its own. That last part is new: this section previously
+claimed all three targets built while `flutter build web` answered *"This
+project is not configured for the web"*, because no platform directory existed
+at all. Analyze and test never touch a platform runner, so nothing in CI
+contradicted the claim. Now something does.
+
+Of the tests, the one that matters most splits a box-drawing character across
+two WebSocket frames and asserts it survives — decoding each chunk on its own
+turns both halves into U+FFFD and draws mojibake exactly where TUI frame lines
+are.
 
 **Scope:** Flutter project for Linux/Windows/Web first, session list,
 terminal view with `xterm.dart`, reconnect logic, file browser.
@@ -210,18 +218,37 @@ terminal view with `xterm.dart`, reconnect logic, file browser.
 codebase; a terminal session can be opened, disconnected, and resumed on
 another simulated client.
 
-## Phase 9 — Android & polish · `done (Android glue outstanding)`
+**Not met:** the file browser screen. The file *API client* exists and is
+tested; there is no screen in `lib/screens/` that uses it.
+
+## Phase 9 — Android & polish · `in progress`
 
 **Built:** the mobile control bar with a latching Ctrl (which is what makes
 Ctrl+C reachable on a touch keyboard at all), the tus upload client with the
-client-side half of the SHA-256 double check, and the share-to-session flow.
+client-side half of the SHA-256 double check, the share-to-session flow, the
+`app/android/` platform project, and the Kotlin share-sheet bridge — verified
+by building an APK and reading its merged manifest, not by inspection.
 
-**Deliberately not built, with reasons:** the `app/android/` platform folder,
-because `flutter create` has never been run here and a hand-written Gradle
-project would be confidently wrong — the exact manifest and Kotlin glue are in
-`app/README.md` instead. FIDO2 hardware keys, because a passkey binds to a
-domain and no installation has one configured yet (D-04). Client-side push, because ntfy already carries it
-server-side.
+**Not built:** device pairing in the app. This is the gap that matters most in
+the whole project right now, so it is stated plainly rather than buried: the
+daemon's pairing chain is complete and fail-closed, and the client has no way
+to walk it. There is no Ed25519 key generation, no platform-backed key storage,
+no challenge signing, no pairing screen, and no server-address setting — the
+app defaults to its own loopback address. A device therefore cannot
+authenticate to a daemon that has authentication switched on.
+
+The WebAuthn side is unreachable from either end: `webauthn.go` can verify an
+assertion, but nothing calls `BeginRegistration` or `BindSession`, no
+credential is persisted, and there are no registration endpoints. The passkey
+factor is fail-closed, so this makes pairing impossible rather than weak — but
+"impossible" is not "done".
+
+Revocation has the same shape: it sits behind a single-use step-up grant and
+no production code path issues one.
+
+**Deliberately not built, with reasons:** FIDO2 hardware keys, because a
+passkey binds to a domain and no installation has one configured yet (D-04).
+Client-side push, because ntfy already carries it server-side.
 
 **Scope:** Mobile control bar, native copy-paste UX, share-sheet integration
 for file uploads, FIDO2 hardware key support as a Linux fallback,

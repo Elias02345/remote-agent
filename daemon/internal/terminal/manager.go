@@ -38,9 +38,18 @@ func NewID() (string, error) {
 
 // Create starts a new terminal session.
 //
-// Order matters: the tmux session is created first, because a database row
-// pointing at a tmux session that does not exist would show up in the session
-// list as a terminal the user can never attach to.
+// A session is three things — a tmux session, a database row, and a terminal
+// lock — and they have to end up either all present or all absent. The lock is
+// the one that matters most: without it the idle updater believes the machine
+// is idle and will restart services and install packages underneath a terminal
+// the user has open. That is exactly the failure the lock exists to prevent, so
+// a session that exists without one is worse than no session at all.
+//
+// The lock is therefore taken FIRST, before anything durable is created. It is
+// the only step here that can fail for a reason unrelated to this request — a
+// permissions problem on /run/claudecode-locks, a full tmpfs — and finding that
+// out after tmux and the database already have state means unwinding two things
+// instead of zero.
 func (m *Manager) Create(name, cwd, shell string) (db.Session, error) {
 	id, err := NewID()
 	if err != nil {
@@ -48,19 +57,21 @@ func (m *Manager) Create(name, cwd, shell string) (db.Session, error) {
 	}
 	tmuxName := "ccr-" + id
 
+	if err := m.Locks.Acquire(id); err != nil {
+		return db.Session{}, err
+	}
+
 	if err := m.Tmux.NewSession(tmuxName, cwd, shell); err != nil {
+		_ = m.Locks.Release(id)
 		return db.Session{}, err
 	}
 
 	s := db.Session{ID: id, Name: name, TmuxSession: tmuxName, Cwd: cwd, Shell: shell}
 	if err := m.DB.CreateSession(s); err != nil {
-		// Roll the tmux session back so a failed create does not leak a
-		// detached session nobody has a handle to any more.
+		// Unwind both, so a failed create does not leave a detached tmux
+		// session nobody has a handle to and a lock nothing will ever release.
 		_ = m.Tmux.KillSession(tmuxName)
-		return db.Session{}, err
-	}
-
-	if err := m.Locks.Acquire(id); err != nil {
+		_ = m.Locks.Release(id)
 		return db.Session{}, err
 	}
 
@@ -84,17 +95,30 @@ func (m *Manager) Close(id string) error {
 	if err != nil {
 		return err
 	}
+
+	// tmux first, and a failure here stops the whole close.
+	//
+	// The previous order marked the row closed, then killed tmux, then released
+	// the lock regardless of whether the kill worked — so a failed kill left a
+	// live tmux session, with the user's shell and whatever it was running
+	// still in it, marked closed in the database, invisible in the session
+	// list, and no longer holding an update lock. The user could not reach it
+	// again and the updater no longer knew it was there. Retrying was
+	// impossible too: the row was already closed, so the retry got ErrNoRows.
+	//
+	// Refusing to proceed leaves the session exactly as it was, which is a
+	// state the user can see and try again from.
+	if err := m.Tmux.KillSession(s.TmuxSession); err != nil {
+		return fmt.Errorf("close session %s: %w", id, err)
+	}
+
 	if err := m.DB.CloseSession(id); err != nil {
 		return err
 	}
 
-	killErr := m.Tmux.KillSession(s.TmuxSession)
-
-	// Release even when killing tmux failed: the session is closed as far as
-	// the user and the database are concerned, and a lock left behind for a
-	// session nobody can reopen would block system updates forever.
-	if err := m.Locks.Release(id); err != nil {
-		return err
-	}
-	return killErr
+	// Last, and only once the session really is gone. A lock outliving a
+	// terminal blocks every future system update; a lock released before the
+	// terminal is gone lets an update run underneath it. Doing this after the
+	// kill and the row update means neither can happen.
+	return m.Locks.Release(id)
 }

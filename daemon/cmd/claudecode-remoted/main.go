@@ -324,6 +324,24 @@ func newRouter(cfg routerConfig) (wiredRouter, error) {
 	root.Handle("/owner/devices/revoke", identity.RequireDevice(deviceAuth,
 		identity.RequireStepUp(stepUpGate, identity.ActionRevokeDevice, ownerDeviceRevokeMux)))
 
+	// The ceremony that actually issues the grant the route above consumes.
+	//
+	// Without it, StepUpGate.Grant had no production caller at all, so
+	// /owner/devices/revoke was not merely guarded — it was unreachable, and
+	// an owner with a stolen phone had no way to revoke that phone's key
+	// through the shipped system. Mounted inside RequireDevice so the grant
+	// binds to a device id that was cryptographically proven rather than
+	// claimed in a request body.
+	root.Handle("/owner/step-up", identity.RequireDevice(deviceAuth,
+		identity.StepUpHandler(identity.StepUpConfig{
+			Gate:         stepUpGate,
+			Limiter:      rateLimiter,
+			Resolver:     identity.NewClientIPResolver(cfg.TrustedProxies),
+			Email:        cfg.OwnerEmail,
+			PasswordHash: cfg.OwnerPasswordHash,
+			TOTPSecret:   cfg.OwnerTOTPSecret,
+		})))
+
 	// Lets an already-paired device sign the everyday Ed25519
 	// challenge-response (Section 5.4). Unauthenticated by necessity — a
 	// device has nothing to authenticate with yet at this step, exactly

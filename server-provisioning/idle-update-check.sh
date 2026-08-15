@@ -48,18 +48,27 @@ fi
 
 note "System idle - starting update"
 
+# Failures that were swallowed but must still be reported at the end. An
+# update run that says "Update finished" after paru and npm both failed is
+# worse than one that fails outright: the operator reads the notification,
+# believes the machine is current, and it is not.
+FAILURES=()
+
 if [[ "$CCR_SKIP_PACKAGE_UPDATES" != "1" ]]; then
   pacman -Syu --noconfirm
 
   # Section 4.3 writes this as `command -v paru && paru ... || true`, which
   # reads as if-then-else but is not: the `|| true` also swallows a failure of
   # the test itself. Same behaviour, stated unambiguously.
+  #
+  # These stay non-fatal on purpose — a broken AUR package must not stop the
+  # kernel check below from running — but non-fatal is not the same as unseen.
   if command -v paru >/dev/null 2>&1; then
-    paru -Syu --noconfirm --sudoloop || true
+    paru -Syu --noconfirm --sudoloop || FAILURES+=("paru (AUR packages)")
   fi
 
   for tool in claude-code codex; do
-    npm update -g "$tool" >/dev/null 2>&1 || true
+    npm update -g "$tool" >/dev/null 2>&1 || FAILURES+=("npm update -g ${tool}")
   done
 else
   note "CCR_SKIP_PACKAGE_UPDATES=1, skipping package manager calls (test mode)"
@@ -90,8 +99,20 @@ if command -v pacman >/dev/null 2>&1; then
   fi
 fi
 
-if [[ -n "$NTFY_URL" ]]; then
-  curl -s -d "ClaudeCode Remote: update finished ($(date '+%d.%m %H:%M'))" "$NTFY_URL" >/dev/null || true
+if [[ "${#FAILURES[@]}" -gt 0 ]]; then
+  SUMMARY="update finished with ${#FAILURES[@]} failure(s): ${FAILURES[*]}"
+  note "WARNING: ${SUMMARY}"
+else
+  SUMMARY="update finished"
 fi
 
-note "Update finished"
+if [[ -n "$NTFY_URL" ]]; then
+  curl -s -d "ClaudeCode Remote: ${SUMMARY} ($(date '+%d.%m %H:%M'))" "$NTFY_URL" >/dev/null || true
+fi
+
+note "$SUMMARY"
+
+# Non-zero when something did not update, so `systemctl status idle-updater`
+# and the journal both show it rather than a green unit that quietly skipped
+# half its job.
+[[ "${#FAILURES[@]}" -eq 0 ]]
