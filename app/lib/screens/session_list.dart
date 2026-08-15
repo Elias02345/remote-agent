@@ -177,7 +177,18 @@ class _SessionRow extends StatelessWidget {
         child: Row(
           children: [
             // Status is not shown by colour alone — StatusDot varies its shape.
-            const StatusDot(state: LinkState.connected),
+            //
+            // Driven by what the daemon reports about the session, not by a
+            // constant. Hardcoding `connected` painted every row — including
+            // sessions the server had already closed — as live, which is worse
+            // than showing no indicator at all: an indicator that is always
+            // green is one the user learns to stop reading.
+            //
+            // This is session liveness, not transport state: the list holds no
+            // sockets, and a session stays open across a dropped connection by
+            // design. LinkState.ended is the closed case because that is
+            // exactly what it means — the session is gone, not unreachable.
+            StatusDot(state: session.isOpen ? LinkState.connected : LinkState.ended),
             const SizedBox(width: CcrSpace.s2),
             Expanded(
               child: Column(

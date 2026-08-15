@@ -15,6 +15,14 @@
   buy that would also permit it everywhere else. See app/README.md.
 -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!--
+      Without this the release build has no network access at all. Flutter's
+      template declares INTERNET only in the debug and profile manifests, so
+      `flutter run` works, a release build produces an APK that installs and
+      launches, and every request from it fails — a whole client that cannot
+      reach its daemon, and nothing in the build output says why.
+    -->
+    <uses-permission android:name="android.permission.INTERNET"/>
     <application
         android:label="claudecode_remote"
         android:name="${applicationName}"

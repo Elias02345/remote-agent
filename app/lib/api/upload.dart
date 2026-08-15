@@ -6,6 +6,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:convert/convert.dart';
 import 'package:crypto/crypto.dart';
 import 'package:http/http.dart' as http;
 
@@ -87,21 +88,23 @@ class TusUploader {
   /// the store roots — e.g. `myproject/to-agent`), and returns the verified
   /// SHA-256 once both comparisons from Section 8.2 pass.
   ///
-  /// Reads the whole file into memory to hash it once and slice chunks from
-  /// the same buffer.
-  // ponytail: fine for the photos/documents this is built for (Section 8.3's
-  // share sheet); stream from disk instead if this ever needs to carry
-  // multi-gigabyte files on a memory-constrained device.
+  /// Both the hash and the chunks are streamed from disk. Reading the whole
+  /// file into memory first was simpler and worked for the photos this is
+  /// mostly used for, but it puts a hard ceiling on the feature that has
+  /// nothing to do with the protocol: the transfer is resumable and chunked
+  /// precisely so a large file is not a single indivisible thing, and buffering
+  /// it whole gives that back — a phone picking a video out of its gallery
+  /// would be killed by the OS before the first byte went out.
   Future<String> upload(
     File file, {
     required String targetDir,
     required String targetName,
     UploadProgress? onProgress,
   }) async {
-    final bytes = await file.readAsBytes();
-    final length = bytes.length;
+    final length = await file.length();
     // Step 1 of Section 8.2: hash locally before a single byte goes out.
-    final localHash = sha256.convert(bytes).toString();
+    // Chunked so memory stays flat regardless of file size.
+    final localHash = await _hashFile(file);
 
     final uploadUri = await _create(
       length: length,
@@ -110,35 +113,67 @@ class TusUploader {
       sha256Hex: localHash,
     );
 
-    var offset = 0;
-    http.Response? finishing;
-    Object? lastError;
+    final handle = await file.open();
+    try {
+      var offset = 0;
+      http.Response? finishing;
+      Object? lastError;
 
-    for (var attempt = 1; attempt <= maxAttempts && finishing == null; attempt++) {
-      try {
-        while (offset < length) {
-          final end = offset + chunkSize < length ? offset + chunkSize : length;
-          final res = await _patchChunk(uploadUri, bytes, offset, end);
-          offset = int.tryParse(res.headers['upload-offset'] ?? '') ?? end;
-          onProgress?.call(offset, length);
-          if (offset >= length) finishing = res;
+      for (var attempt = 1; attempt <= maxAttempts && finishing == null; attempt++) {
+        try {
+          // An empty file has no chunk to send, so the loop below never runs
+          // and never produces a finishing response. tus still expects the
+          // upload to be completed, so it gets one zero-length PATCH: the
+          // server sees offset == length and finishes it. Without this a
+          // zero-byte file could be created but never completed — it would
+          // sit as a partial upload forever and the caller would be handed a
+          // StateError for a transfer that had nothing wrong with it.
+          if (length == 0) {
+            finishing = await _patchChunk(uploadUri, Uint8List(0), 0);
+            onProgress?.call(0, 0);
+            break;
+          }
+
+          while (offset < length) {
+            final end = offset + chunkSize < length ? offset + chunkSize : length;
+            await handle.setPosition(offset);
+            final chunk = await handle.read(end - offset);
+            final res = await _patchChunk(uploadUri, chunk, offset);
+            offset = int.tryParse(res.headers['upload-offset'] ?? '') ?? end;
+            onProgress?.call(offset, length);
+            if (offset >= length) finishing = res;
+          }
+        } on Object catch (e) {
+          lastError = e;
+          // Resume from wherever the server actually landed, not from where
+          // this attempt assumed it left off — a chunk can succeed on the
+          // wire even when the client never sees the response, and resending
+          // it would either double-write or hit ErrOffsetConflict for nothing.
+          offset = await _headOffset(uploadUri);
         }
-      } on Object catch (e) {
-        lastError = e;
-        // Resume from wherever the server actually landed, not from where
-        // this attempt assumed it left off — a chunk can succeed on the
-        // wire even when the client never sees the response, and resending
-        // it would either double-write or hit ErrOffsetConflict for nothing.
-        offset = await _headOffset(uploadUri);
       }
-    }
 
-    if (finishing == null) {
-      throw lastError ??
-          StateError('upload did not complete: no confirmation from the server');
-    }
+      if (finishing == null) {
+        throw lastError ??
+            StateError('upload did not complete: no confirmation from the server');
+      }
 
-    return _verifyChecksum(finishing, localHash);
+      return _verifyChecksum(finishing, localHash);
+    } finally {
+      await handle.close();
+    }
+  }
+
+  /// SHA-256 of [file], read in chunks so a large file does not have to fit in
+  /// memory to be hashed.
+  static Future<String> _hashFile(File file) async {
+    final output = AccumulatorSink<Digest>();
+    final input = sha256.startChunkedConversion(output);
+    await for (final chunk in file.openRead()) {
+      input.add(chunk);
+    }
+    input.close();
+    return output.events.single.toString();
   }
 
   Future<Uri> _create({
@@ -173,7 +208,7 @@ class TusUploader {
     return baseUri.resolve(location);
   }
 
-  Future<http.Response> _patchChunk(Uri uploadUri, Uint8List bytes, int offset, int end) async {
+  Future<http.Response> _patchChunk(Uri uploadUri, Uint8List chunk, int offset) async {
     final res = await _http.patch(
       uploadUri,
       headers: {
@@ -182,7 +217,7 @@ class TusUploader {
         'Content-Type': 'application/offset+octet-stream',
         ...await authHeaders(),
       },
-      body: bytes.sublist(offset, end),
+      body: chunk,
     );
 
     // 204 is a normal chunk (done or not); 422 is a completed-but-mismatched

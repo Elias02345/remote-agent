@@ -10,7 +10,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
       - name: Install shellcheck
         run: |
@@ -59,7 +59,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
       - name: Run provisioning harness
         # Invoked through bash on purpose. The exec bit is set in the index,
@@ -76,7 +76,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
       - name: Run agentctl harness
         run: bash server-provisioning/test/run-agentctl-tests.sh
@@ -87,7 +87,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
       - name: Run idle update harness
         run: bash server-provisioning/test/run-idle-update-tests.sh
@@ -98,7 +98,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
       - name: Run backup harness
         run: bash server-provisioning/test/run-backup-tests.sh
@@ -117,7 +117,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
       - name: Run e2e harness
         run: bash server-provisioning/test/run-e2e-tests.sh
@@ -130,14 +130,14 @@ jobs:
         working-directory: app
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
       # The only third-party action in this workflow. There is no practical
       # alternative: installing the Flutter SDK by hand means fetching a
       # tarball, pinning a channel and managing its cache, which is exactly
       # what this action does and does correctly.
       - name: Set up Flutter
-        uses: subosito/flutter-action@v2
+        uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2
         with:
           flutter-version: '3.44.1'
           channel: stable
@@ -156,6 +156,49 @@ jobs:
       - name: Test
         run: flutter test
 
+      # The ROADMAP claimed the desktop and web targets built long before any
+      # of them had a platform directory at all — `flutter build web` answered
+      # "This project is not configured for the web". Analyze and test say
+      # nothing about that: they run against lib/ and never touch a platform
+      # runner. These steps are the only thing standing between "we support
+      # Linux and Web" and it being true.
+      - name: Build for web
+        run: flutter build web --release
+
+      - name: Install Linux desktop build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build libgtk-3-dev
+
+      - name: Build for Linux desktop
+        run: flutter build linux --release
+
+  flutter-windows:
+    name: Flutter Windows build
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      - name: Checkout
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2
+        with:
+          flutter-version: '3.44.1'
+          channel: stable
+          cache: true
+
+      - name: Resolve dependencies
+        run: flutter pub get
+
+      # Its own job because it needs a Windows runner and the MSVC toolchain.
+      # Worth the extra runner: the Windows target is one of the four the
+      # architecture names, and nothing else in CI would notice it breaking.
+      - name: Build for Windows desktop
+        run: flutter build windows --release
+
   daemon:
     name: Daemon build and tests
     runs-on: ubuntu-latest
@@ -164,10 +207,10 @@ jobs:
         working-directory: daemon
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version: '1.26.6'
 
@@ -199,5 +242,5 @@ jobs:
       # rather than something found by hand months later.
       - name: Vulnerability scan
         run: |
-          go install golang.org/x/vuln/cmd/govulncheck@latest
+          go install golang.org/x/vuln/cmd/govulncheck@v1.7.0
           "$(go env GOPATH)/bin/govulncheck" ./...

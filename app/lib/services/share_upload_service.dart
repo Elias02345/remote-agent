@@ -83,6 +83,34 @@ class ShareUploadService {
 
   static String _filenameOf(File file) {
     final segments = file.uri.pathSegments;
-    return segments.isNotEmpty && segments.last.isNotEmpty ? segments.last : file.path;
+    final raw = segments.isNotEmpty && segments.last.isNotEmpty ? segments.last : file.path;
+    return sanitiseFilename(raw);
   }
+}
+
+/// Strips characters a terminal would interpret rather than display.
+///
+/// [SharedFileSuggestion.insertLine] is offered to the user as text to insert
+/// into a live terminal. The line is built from a filename, and a filename that
+/// arrives through the Android share sheet comes from whatever app sent it —
+/// it is not something this app chose. A name containing a carriage return
+/// turns the single suggested comment into two lines, the second of which the
+/// shell executes the moment the user taps "Insert into terminal"; an escape
+/// character can rewrite what the terminal displays so the visible line is not
+/// the line that runs.
+///
+/// The user tapping the button is what makes this reachable, so it is not
+/// silent code execution — but "the user approved it" is worth very little when
+/// what they approved was not what they saw. Refusing the characters costs
+/// nothing: no legitimate filename contains a newline or a C0 control code.
+///
+/// Exported for direct testing rather than only through a File.
+String sanitiseFilename(String raw) {
+  final cleaned = raw.replaceAll(RegExp(r'[\x00-\x1f\x7f]'), '');
+  // Strip path separators too: a name is a name, and a shared "file" claiming
+  // to be `../../etc/cron.d/evil` has no business becoming a path segment. The
+  // daemon refuses this as well (files.Store.Resolve), but the suggestion line
+  // is built here and shown to the user regardless of what the server says.
+  final base = cleaned.split(RegExp(r'[/\\]')).last;
+  return base.isEmpty ? 'shared-file' : base;
 }
