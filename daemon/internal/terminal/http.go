@@ -219,6 +219,25 @@ func sameOriginOrNone(r *http.Request) bool {
 	return strings.EqualFold(u.Host, r.Host)
 }
 
+// HandleHealthWS accepts a WebSocket upgrade, sends one message and closes.
+//
+// It exists for server-provisioning/cloudgate/verify-tunnel.sh: proving that
+// Upgrade headers survive CloudGate needs an upgrade that actually completes,
+// and every session route requires a single-use ticket the operator cannot
+// obtain before pairing their first device. Rather than weakening that, this is
+// a route with nothing behind it — no session lookup, no tmux, no PTY, no
+// reads from the client. The upgrader's same-origin check still applies.
+func HandleHealthWS(w http.ResponseWriter, r *http.Request) {
+	conn, err := upgrader.Upgrade(w, r, nil)
+	if err != nil {
+		// Upgrade has already written a response by this point.
+		return
+	}
+	defer conn.Close()
+	_ = conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
+	_ = conn.WriteJSON(serverMessage{Type: "health", Data: "ok"})
+}
+
 // handleStream pumps raw bytes between the client and a tmux attachment.
 //
 // Terminal output is base64-encoded inside the JSON envelope because PTY

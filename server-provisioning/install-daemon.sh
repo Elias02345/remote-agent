@@ -37,13 +37,51 @@ step_build() {
   local gocache="${STATE_DIR}/gocache"
   install -d -o "$CCR_AGENT_USER" -g "$CCR_AGENT_USER" -m 0755 "$gocache"
 
+  # The build output must NOT land on a predictable path in a world-writable
+  # directory. `go build -o /tmp/claudecode-remoted` followed by root copying
+  # that file is a straightforward local privilege escalation: the agent user
+  # (or anyone else able to write /tmp first) replaces the file, or swaps it
+  # for a symlink to something root-readable, between the build finishing and
+  # root reading it. root then installs whatever it finds into
+  # /usr/local/bin, world-executable, and systemd runs it.
+  #
+  # So: root creates the staging directory, hands write access to the build
+  # user for exactly the duration of the build, then takes it back *before*
+  # inspecting the result. Once the chown returns, no non-root process can
+  # alter the directory, and the checks below cannot be raced.
+  local staging
+  staging="$(mktemp -d)"
+  chmod 0755 "$staging"
+  chown "$CCR_AGENT_USER":"$CCR_AGENT_USER" "$staging"
+
+  local built="${staging}/claudecode-remoted"
+  local build_rc=0
   ( cd "$DAEMON_SRC" && \
     sudo -u "$CCR_AGENT_USER" env GOCACHE="$gocache" GOPATH="${gocache}/gopath" \
-      go build -o /tmp/claudecode-remoted ./cmd/claudecode-remoted ) ||
-    fail "go build failed"
+      go build -o "$built" ./cmd/claudecode-remoted ) || build_rc=$?
 
-  install -m 0755 /tmp/claudecode-remoted /usr/local/bin/claudecode-remoted
-  rm -f /tmp/claudecode-remoted
+  # The directory only, never -R: a recursive chown/chmod follows symlinks the
+  # build user may have planted and would happily rewrite the mode of whatever
+  # they point at. Taking write access to the *directory* is what actually
+  # closes the race — without it nobody can create, rename or replace an entry
+  # here, so the path we validate is the path we install.
+  chown root:root "$staging"
+  chmod 0755 "$staging"
+
+  if [[ "$build_rc" -ne 0 ]]; then
+    rm -rf "$staging"
+    fail "go build failed"
+  fi
+
+  # -f dereferences symlinks, so test for the link separately: a symlink to
+  # /etc/shadow would satisfy -f and get copied to a world-readable path.
+  if [[ -L "$built" || ! -f "$built" ]]; then
+    rm -rf "$staging"
+    fail "build output at ${built} is not a regular file; refusing to install it."
+  fi
+
+  install -m 0755 "$built" /usr/local/bin/claudecode-remoted
+  rm -rf "$staging"
   ok "Installed /usr/local/bin/claudecode-remoted"
 }
 

@@ -21,25 +21,9 @@ require_root
 
 # --- configuration -----------------------------------------------------------
 
-# Load SCRIPT_DIR/.env if present, but never let it override a variable the
-# caller already exported — the file is a convenience for operators who'd
-# rather edit a file than export vars, not a way to silently shadow an
-# explicit `CCR_FOO=bar ./provision.sh`.
-if [[ -f "$SCRIPT_DIR/.env" ]]; then
-  while IFS='=' read -r ccr_key ccr_value; do
-    [[ "$ccr_key" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || continue
-    # Strip one layer of surrounding quotes. Shell-style quoting is the habit
-    # everyone brings to a .env file, but this parser is not a shell: without
-    # this, CCR_ADMIN_PUBKEY="ssh-ed25519 AAAA..." would arrive with a literal
-    # leading quote and fail the Ed25519 check with a baffling message.
-    if [[ "$ccr_value" == '"'*'"' || "$ccr_value" == "'"*"'" ]]; then
-      ccr_value="${ccr_value:1:${#ccr_value}-2}"
-    fi
-    if [[ -z "${!ccr_key+x}" ]]; then
-      export "${ccr_key}=${ccr_value}"
-    fi
-  done < <(grep -vE '^[[:space:]]*(#|$)' "$SCRIPT_DIR/.env")
-fi
+# Ownership-checked, CCR_*-only loader (lib/common.sh) — never a general
+# environment injection point for a root script.
+load_env_file "$SCRIPT_DIR/.env"
 
 CCR_ADMIN_USER="${CCR_ADMIN_USER:-admin}"
 CCR_AGENT_USER="${CCR_AGENT_USER:-agent}"
@@ -52,6 +36,16 @@ CCR_TAILSCALE_AUTHKEY="${CCR_TAILSCALE_AUTHKEY:-}"
 CCR_SKIP_TAILSCALE="${CCR_SKIP_TAILSCALE:-0}"
 CCR_ADMIN_PUBKEY="${CCR_ADMIN_PUBKEY:-}"
 CCR_ADMIN_PASSWORD_HASH="${CCR_ADMIN_PASSWORD_HASH:-}"
+
+# Architecture Section 2.2 wants SSH reachable only over the private Tailscale
+# overlay. That cannot be the default here: on a first run Tailscale is not up
+# yet, and an sshd that fails to bind a not-yet-existing address is a locked
+# door with the operator on the outside. So it is an explicit opt-in — set it
+# to the machine's Tailscale IP once `tailscale ip -4` returns one.
+#
+# 127.0.0.1 is always added alongside it, so a local console/serial session can
+# still reach sshd if the overlay is down.
+CCR_SSH_LISTEN_ADDRESS="${CCR_SSH_LISTEN_ADDRESS:-}"
 
 # Refusing to proceed without an authorized key is the whole point of this
 # guard: PasswordAuthentication gets disabled later in step_ssh, so a run
@@ -206,10 +200,11 @@ step_sudoers() {
 step_ssh() {
   banner "Hardening sshd"
 
-  # Never restart sshd on an untested config: back up once, apply options,
-  # validate with `sshd -t`, and only reload/restart on success. On failure,
-  # restore the pristine backup before failing so the running (already
-  # validated, previously working) config stays in effect.
+  # Keep the pristine pre-provisioning file around for the operator. It is
+  # deliberately NOT the rollback target: on a machine provisioned six months
+  # ago, .ccr-orig is the *original distro* config, so restoring it after a
+  # failed edit would silently swap a hardened sshd for a stock one that
+  # permits root logins. That is a downgrade dressed up as a safe rollback.
   backup_once "$SSHD_CONFIG"
 
   # Host keys must exist before `sshd -t` will validate anything at all — it
@@ -221,17 +216,36 @@ step_ssh() {
   # would trip every client's known_hosts warning).
   ssh-keygen -A
 
-  set_sshd_option "PasswordAuthentication" "no"
-  set_sshd_option "PermitRootLogin" "no"
-  set_sshd_option "PubkeyAuthentication" "yes"
-  set_sshd_option "AllowUsers" "${CCR_ADMIN_USER} ${CCR_AGENT_USER}"
-  set_sshd_option "Port" "${CCR_SSH_PORT}"
+  # Every edit happens on a copy. The live config is replaced only after
+  # `sshd -t` has accepted the candidate, so there is no window in which
+  # /etc/ssh/sshd_config is half-edited, and no rollback path that reaches for
+  # a stale backup.
+  local candidate
+  candidate="$(mktemp)"
+  cp -p "$SSHD_CONFIG" "$candidate" 2>/dev/null || : > "$candidate"
 
-  if ! sshd -t; then
-    err "sshd -t failed on the new config; restoring backup."
-    cp -p "${SSHD_CONFIG}.ccr-orig" "$SSHD_CONFIG"
-    fail "sshd config validation failed; restored previous config, nothing was restarted."
+  set_sshd_option "$candidate" "PasswordAuthentication" "no"
+  set_sshd_option "$candidate" "PermitRootLogin" "no"
+  set_sshd_option "$candidate" "PubkeyAuthentication" "yes"
+  set_sshd_option "$candidate" "AllowUsers" "${CCR_ADMIN_USER} ${CCR_AGENT_USER}"
+  set_sshd_option "$candidate" "Port" "${CCR_SSH_PORT}"
+
+  if [[ -n "$CCR_SSH_LISTEN_ADDRESS" ]]; then
+    # Two lines, so set_sshd_option's one-active-line contract does not apply:
+    # comment out whatever is there, then append both.
+    sed -i -E '/^[[:space:]]*ListenAddress[[:space:]]+/Is/^/# /' "$candidate"
+    printf 'ListenAddress %s\nListenAddress 127.0.0.1\n' "$CCR_SSH_LISTEN_ADDRESS" >> "$candidate"
   fi
+
+  if ! sshd -t -f "$candidate"; then
+    rm -f "$candidate"
+    fail "sshd rejected the candidate config; /etc/ssh/sshd_config is unchanged and nothing was restarted."
+  fi
+
+  # cat rather than mv: preserves the live file's owner, mode and SELinux
+  # context instead of inheriting mktemp's.
+  cat "$candidate" > "$SSHD_CONFIG"
+  rm -f "$candidate"
 
   if has_systemd; then
     systemctl enable sshd
@@ -347,6 +361,18 @@ print_summary() {
     warn "authenticate. Run 'passwd $CCR_ADMIN_USER' now, BEFORE closing this"
     warn "root session — otherwise $CCR_ADMIN_USER can log in over SSH but"
     warn "cannot administer the machine."
+    warn "=================================================================="
+  fi
+
+  if [[ -n "$CCR_SSH_LISTEN_ADDRESS" ]]; then
+    log "SSH listens on:  ${CCR_SSH_LISTEN_ADDRESS} and 127.0.0.1 only"
+  else
+    warn "=================================================================="
+    warn "SSH listens on ALL interfaces. Architecture Section 2.2 wants it"
+    warn "reachable only over Tailscale. Once 'tailscale ip -4' returns an"
+    warn "address, set CCR_SSH_LISTEN_ADDRESS to it and re-run this script."
+    warn "Verify a new session over the overlay BEFORE closing the current"
+    warn "one — that is the whole reason this is not the default."
     warn "=================================================================="
   fi
 

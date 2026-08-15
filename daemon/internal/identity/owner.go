@@ -19,7 +19,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net"
 	"net/http"
 	"strings"
 	"sync"
@@ -59,7 +58,35 @@ type OwnerConfig struct {
 	WebAuthnRPID        string
 	WebAuthnDisplayName string
 	WebAuthnOrigins     []string
+	// TrustedProxies lists CIDRs allowed to set forwarded-for headers. Empty
+	// means every request is rate-limited against its own RemoteAddr — see
+	// ClientIPResolver for why that is the right default and the wrong answer
+	// behind CloudGate.
+	TrustedProxies []string
 }
+
+// Limits on one in-progress pairing attempt.
+//
+// Pairing is unauthenticated by necessity — a device has no credentials until
+// it pairs — so everything /owner/pair/start accepts is attacker-controlled and
+// retained for PairingTTL. Without a cap on the metadata and on the number of
+// attempts, a caller with no credentials can pin arbitrary memory in the
+// daemon: the request body limit is a megabyte, the attempts map was unbounded,
+// and each entry survives ten minutes.
+//
+// The numbers are deliberately far above any real client: a device name is a
+// phone model, a platform is "android".
+const (
+	maxDeviceNameLen = 128
+	maxPlatformLen   = 64
+	// maxPairingAttempts bounds the whole map. A single owner pairing a
+	// handful of devices never approaches this; a flood hits it immediately.
+	maxPairingAttempts = 32
+)
+
+// ErrTooManyPairingAttempts is returned once maxPairingAttempts unexpired
+// attempts already exist.
+var ErrTooManyPairingAttempts = errors.New("too many pairing attempts in progress")
 
 // pairingRecord is one in-progress pairing attempt plus the device
 // metadata that arrived with it at /owner/pair/start. Attempt itself
@@ -90,8 +117,9 @@ type Owner struct {
 	totpVerifier     *TOTPVerifier     // nil if not configured
 	passkeyVerifier  *WebAuthnVerifier // never nil; Configured() may be false
 
-	store   ownerDeviceStore
-	limiter *RateLimiter
+	store    ownerDeviceStore
+	limiter  *RateLimiter
+	resolver *ClientIPResolver
 
 	mu       sync.Mutex
 	attempts map[string]*pairingRecord
@@ -106,6 +134,7 @@ func NewOwner(cfg OwnerConfig, store ownerDeviceStore, limiter *RateLimiter) *Ow
 		email:           cfg.Email,
 		store:           store,
 		limiter:         limiter,
+		resolver:        NewClientIPResolver(cfg.TrustedProxies),
 		attempts:        make(map[string]*pairingRecord),
 		passkeyVerifier: NewWebAuthnVerifier(cfg.WebAuthnRPID, cfg.WebAuthnDisplayName, cfg.WebAuthnOrigins),
 	}
@@ -158,13 +187,7 @@ func randomID() (string, error) {
 	return hex.EncodeToString(buf), nil
 }
 
-func clientIP(r *http.Request) string {
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		return r.RemoteAddr
-	}
-	return host
-}
+func (o *Owner) clientIP(r *http.Request) string { return o.resolver.IP(r) }
 
 func writeOwnerJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
@@ -220,6 +243,20 @@ func (o *Owner) handlePairStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Metadata is attacker-supplied and retained for PairingTTL, so it is
+	// capped rather than trusted. Truncating silently would be worse than
+	// refusing: the name shown next to a paired device is how the owner
+	// recognises it later, and quietly storing half of it invites confusion
+	// exactly where confusion is expensive.
+	if len(body.DeviceName) > maxDeviceNameLen {
+		writeAuthError(w, http.StatusBadRequest, "device_name is too long")
+		return
+	}
+	if len(body.Platform) > maxPlatformLen {
+		writeAuthError(w, http.StatusBadRequest, "platform is too long")
+		return
+	}
+
 	id, err := randomID()
 	if err != nil {
 		writeAuthError(w, http.StatusInternalServerError, "failed to start pairing")
@@ -229,8 +266,21 @@ func (o *Owner) handlePairStart(w http.ResponseWriter, r *http.Request) {
 
 	o.mu.Lock()
 	o.sweepLocked()
-	o.attempts[id] = &pairingRecord{attempt: attempt, deviceName: body.DeviceName, platform: body.Platform}
+	full := len(o.attempts) >= maxPairingAttempts
+	if !full {
+		o.attempts[id] = &pairingRecord{attempt: attempt, deviceName: body.DeviceName, platform: body.Platform}
+	}
 	o.mu.Unlock()
+
+	if full {
+		// Refusing the *new* attempt rather than evicting an old one is the
+		// safe direction: eviction would let a flood push out the owner's
+		// genuine half-finished pairing, turning a memory bound into a way to
+		// cancel someone else's ceremony.
+		o.limiter.RecordIPFailure(o.clientIP(r))
+		writeAuthError(w, http.StatusTooManyRequests, ErrTooManyPairingAttempts.Error())
+		return
+	}
 
 	writeOwnerJSON(w, http.StatusOK, map[string]any{
 		"pairing_id":  id,
@@ -253,18 +303,24 @@ func (o *Owner) handlePairPassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ip := clientIP(r)
+	ip := o.clientIP(r)
 	if err := o.limiter.Allow(ip, o.email); err != nil {
 		writeAuthError(w, http.StatusTooManyRequests, "too many failed attempts")
 		return
 	}
 	if o.email == "" || !strings.EqualFold(body.Email, o.email) {
-		// Same outcome, same accounting, as a wrong password: this
-		// endpoint must not let a caller distinguish "wrong email" from
-		// "wrong password" by the response, and a mismatched email is
-		// exactly as much a failed guess against the account as a
-		// mismatched password is.
-		o.limiter.RecordFailure(ip, o.email)
+		// The response is identical to a wrong password — this endpoint must
+		// not let a caller tell "wrong email" from "wrong password" — but the
+		// *accounting* is not.
+		//
+		// Charging a mismatched email to the account counter meant anyone
+		// could lock the owner out of their own machine with five requests
+		// carrying a made-up address, without knowing the real one. The
+		// lockout is supposed to make guessing the owner's credentials
+		// expensive; it must not make denying the owner service cheap. A
+		// caller who has not named the account has not made an attempt
+		// against it, so this costs the IP only.
+		o.limiter.RecordIPFailure(ip)
 		writeAuthError(w, http.StatusUnauthorized, "invalid credentials")
 		return
 	}
@@ -285,7 +341,7 @@ func (o *Owner) handlePairTOTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ip := clientIP(r)
+	ip := o.clientIP(r)
 	if err := o.limiter.Allow(ip, o.email); err != nil {
 		writeAuthError(w, http.StatusTooManyRequests, "too many failed attempts")
 		return
@@ -307,7 +363,7 @@ func (o *Owner) handlePairPasskey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ip := clientIP(r)
+	ip := o.clientIP(r)
 	if err := o.limiter.Allow(ip, o.email); err != nil {
 		writeAuthError(w, http.StatusTooManyRequests, "too many failed attempts")
 		return
@@ -348,7 +404,12 @@ func (o *Owner) satisfyFactor(w http.ResponseWriter, ip, pairingID string, facto
 
 	switch {
 	case satisfyErr == nil:
-		o.limiter.RecordSuccess(ip, o.email)
+		// Deliberately does NOT clear the failure counters. One satisfied
+		// factor is not a completed authentication, and resetting here let
+		// the factors launder each other's budget: satisfy the password,
+		// counters wiped, five fresh guesses at the TOTP, satisfy the
+		// password again, five more. The reset happens once, in
+		// handlePairComplete.
 		writeOwnerJSON(w, http.StatusOK, map[string]any{"outstanding": outstanding})
 	case errors.Is(satisfyErr, ErrPairingExpired):
 		writeAuthError(w, http.StatusGone, "pairing attempt expired")
@@ -442,6 +503,11 @@ func (o *Owner) handlePairComplete(w http.ResponseWriter, r *http.Request) {
 		writeAuthError(w, http.StatusInternalServerError, "failed to store paired device")
 		return
 	}
+
+	// The one place the counters are forgiven: a device just proved all three
+	// factors, so whatever failed guesses preceded it were the owner fumbling,
+	// not an attacker making progress.
+	o.limiter.RecordSuccess(o.clientIP(r), o.email)
 
 	writeOwnerJSON(w, http.StatusOK, map[string]any{"device_id": deviceID})
 }

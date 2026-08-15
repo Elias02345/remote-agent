@@ -10,7 +10,15 @@ set -Eeuo pipefail
 
 RESTIC_REPOSITORY="${RESTIC_REPOSITORY:-/srv/backups/restic}"
 RESTIC_PASSWORD_FILE="${RESTIC_PASSWORD_FILE:-/etc/claudecode-remote/restic-password}"
-BACKUP_PATHS="${CCR_BACKUP_PATHS:-/var/lib/claudecode-remote /srv/exchange}"
+# Architecture Section 7.2 asks for the agent's configuration and the untracked
+# working data too, not just the daemon's own state. The previous default
+# covered neither: a restore would come back with paired devices and the file
+# exchange intact, and without the owner's .env, the agent's global CLAUDE.md,
+# its GitHub key, or any project checkout's untracked .env — i.e. a successful
+# backup that still loses the things that are actually hard to recreate.
+#
+# /home/agent is the largest of these; the excludes below keep the caches out.
+BACKUP_PATHS="${CCR_BACKUP_PATHS:-/var/lib/claudecode-remote /srv/exchange /etc/claudecode-remote /home/agent}"
 RETENTION_DAILY="${CCR_RETENTION_DAILY:-7}"
 RETENTION_WEEKLY="${CCR_RETENTION_WEEKLY:-4}"
 RETENTION_MONTHLY="${CCR_RETENTION_MONTHLY:-6}"
@@ -54,11 +62,37 @@ for p in $BACKUP_PATHS; do
 done
 [[ ${#existing[@]} -gt 0 ]] || die "none of the configured backup paths exist"
 
+# The daemon's SQLite database runs in WAL mode, so the bytes on disk at any
+# instant are not a valid database: a snapshot taken mid-checkpoint gets a main
+# file and a -wal that disagree. restic copies files, it does not know that.
+#
+# `.backup` is SQLite's online backup API — it takes the right locks and hands
+# back a file that is internally consistent no matter what the daemon is doing.
+# Backing that copy up alongside the live files means the restore has something
+# guaranteed to open, instead of something that usually opens.
+LIVE_DB="/var/lib/claudecode-remote/daemon.db"
+CONSISTENT_DB="/var/lib/claudecode-remote/daemon-consistent.db"
+if [[ -f "$LIVE_DB" ]]; then
+  if command -v sqlite3 >/dev/null 2>&1; then
+    if sqlite3 "$LIVE_DB" ".backup '${CONSISTENT_DB}'"; then
+      note "Wrote a consistent database snapshot to ${CONSISTENT_DB}"
+    else
+      note "WARNING: sqlite3 .backup failed; the snapshot contains only the live database files"
+    fi
+  else
+    note "WARNING: sqlite3 is not installed, cannot take a consistent database snapshot"
+  fi
+fi
+
 note "Backing up: ${existing[*]}"
 restic backup \
   --exclude-caches \
   --exclude 'node_modules' \
   --exclude '*.tmp' \
+  --exclude '/var/lib/claudecode-remote/gocache' \
+  --exclude '/var/lib/claudecode-remote/uploads' \
+  --exclude '/home/agent/.cache' \
+  --exclude '/home/agent/.npm' \
   --tag claudecode \
   "${existing[@]}" || die "restic backup failed"
 

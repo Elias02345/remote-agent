@@ -56,11 +56,14 @@ func main() {
 			"where partial resumable uploads are kept")
 
 		ownerEmail = flag.String("owner-email", "",
-			"owner account email for device pairing (Section 10.2); pairing stays disabled until this and --owner-password-hash are set")
+			"owner account email for device pairing (Section 10.2); pairing stays disabled until this and the password hash are set. "+
+				"Prefer the CCR_OWNER_EMAIL environment variable.")
 		ownerPasswordHash = flag.String("owner-password-hash", "",
-			"Argon2id hash of the owner password (see identity.HashPassword); the password pairing factor is unsatisfiable while this is empty")
+			"Argon2id hash of the owner password (see identity.HashPassword); the password pairing factor is unsatisfiable while this is empty. "+
+				"SECRET — prefer CCR_OWNER_PASSWORD_HASH; a flag value is world-readable in /proc/<pid>/cmdline.")
 		ownerTOTPSecret = flag.String("owner-totp-secret", "",
-			"RFC 6238 TOTP secret for the owner account (see identity.GenerateTOTPSecret); the TOTP pairing factor is unsatisfiable while this is empty")
+			"RFC 6238 TOTP secret for the owner account (see identity.GenerateTOTPSecret); the TOTP pairing factor is unsatisfiable while this is empty. "+
+				"SECRET — prefer CCR_OWNER_TOTP_SECRET; a flag value is world-readable in /proc/<pid>/cmdline.")
 
 		setupOwner = flag.Bool("setup-owner", false,
 			"generate the owner credentials (Argon2id hash + TOTP secret) and exit; reads the password from stdin")
@@ -69,12 +72,33 @@ func main() {
 			"DANGER: disable device authentication on /sessions and /files, for the xterm.js test client only. "+
 				"Refuses to start on a non-loopback bind address. Never the default.")
 
+		trustedProxies = flag.String("trusted-proxies", "",
+			"comma-separated CIDRs (or bare IPs) permitted to set CF-Connecting-IP / X-Forwarded-For. "+
+				"Set this to the address CloudGate connects from, otherwise every request through the tunnel "+
+				"shares one rate-limit bucket. Empty means no header is trusted.")
+
 		publicDomain = flag.String("public-domain", "",
 			"public domain this installation is reachable at (CCR_PUBLIC_DOMAIN in server-provisioning/.env.example). "+
 				"Used as the WebAuthn relying-party ID; the passkey pairing factor stays disabled while this is empty. "+
 				"Once a passkey is registered against it, changing this value invalidates every registered passkey.")
 	)
 	flag.Parse()
+
+	// Secrets belong in the environment, not in argv. /proc/<pid>/cmdline is
+	// world-readable, so a flag value is visible to every local account —
+	// including the coding agents this daemon starts, which run as the same
+	// user. /proc/<pid>/environ is 0400 and owner-only, which is not perfect
+	// separation but is the difference between "every account on the box" and
+	// "this uid and root".
+	//
+	// The flags stay for tests and for running the binary by hand; the
+	// environment only fills in what a flag did not already set, so an explicit
+	// flag still wins.
+	envDefault(ownerEmail, "CCR_OWNER_EMAIL")
+	envDefault(ownerPasswordHash, "CCR_OWNER_PASSWORD_HASH")
+	envDefault(ownerTOTPSecret, "CCR_OWNER_TOTP_SECRET")
+	envDefault(publicDomain, "CCR_PUBLIC_DOMAIN")
+	envDefault(trustedProxies, "CCR_TRUSTED_PROXIES")
 
 	if *setupOwner {
 		if err := runSetupOwner(os.Stdin, os.Stdout, *ownerEmail); err != nil {
@@ -150,6 +174,7 @@ func main() {
 		OwnerPasswordHash: *ownerPasswordHash,
 		OwnerTOTPSecret:   *ownerTOTPSecret,
 		PublicDomain:      *publicDomain,
+		TrustedProxies:    splitRoots(*trustedProxies),
 		InsecureNoAuth:    *insecureNoAuth,
 	})
 	if err != nil {
@@ -167,6 +192,15 @@ func main() {
 	log.Printf("claudecode-remoted listening on %s (db=%s, locks=%s)", *addr, *dbPath, lockMgr.Dir())
 	if err := srv.ListenAndServe(); err != nil {
 		log.Fatalf("server: %v", err)
+	}
+}
+
+// envDefault fills *target from the named environment variable when the flag
+// was left empty. Flag wins, so an explicit command line is never silently
+// overridden by a stale variable in the shell.
+func envDefault(target *string, key string) {
+	if *target == "" {
+		*target = os.Getenv(key)
 	}
 }
 
@@ -192,6 +226,10 @@ type routerConfig struct {
 	// fail-closed default) — see validatePublicDomain for the startup check
 	// that keeps a malformed value from reaching here at all.
 	PublicDomain string
+
+	// TrustedProxies are the CIDRs whose forwarded-for headers the rate
+	// limiter believes (identity.ClientIPResolver). Empty trusts none.
+	TrustedProxies []string
 
 	InsecureNoAuth bool
 }
@@ -234,6 +272,7 @@ func newRouter(cfg routerConfig) (wiredRouter, error) {
 		WebAuthnRPID:        cfg.PublicDomain,
 		WebAuthnDisplayName: "ClaudeCode Remote",
 		WebAuthnOrigins:     webAuthnOrigins,
+		TrustedProxies:      cfg.TrustedProxies,
 	}, identityStore, rateLimiter)
 
 	wsTickets := newWSTicketStore()
@@ -299,6 +338,22 @@ func newRouter(cfg routerConfig) (wiredRouter, error) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"status":"ok"}`))
 	})
+
+	// A WebSocket that exists only to prove a WebSocket survives the tunnel.
+	//
+	// Plain HTTPS answering says nothing about whether a proxy strips Upgrade
+	// headers, and a proxy that does looks perfectly healthy right up until the
+	// first terminal is opened. The obvious check — upgrade against a real
+	// session path — cannot work: session routes require a single-use ticket,
+	// so the verifier gets a 401 before the handshake, and the only ways to
+	// make that check pass would be to hand it a real ticket (needs a paired
+	// device, which the operator does not have yet at this point) or to weaken
+	// the session auth (never).
+	//
+	// So: its own route, unauthenticated, which accepts the upgrade, says
+	// "ok", and closes. It reaches no session, reads nothing and starts
+	// nothing, and the same-origin check still applies.
+	root.HandleFunc("/health/ws", terminal.HandleHealthWS)
 
 	// The xterm.js test client from Phase 4. It exists to validate the
 	// protocol before the Flutter app is built, not as a shipping UI.

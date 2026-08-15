@@ -47,24 +47,44 @@ fi
 # working proves nothing about whether the terminal stream survives the tunnel,
 # and a proxy that silently drops Upgrade headers looks perfectly healthy.
 #
-# A 101 means the upgrade was accepted; 404 means routing works but the session
-# does not exist, which still proves Upgrade headers survive the tunnel.
+# This probes /health/ws, not a session route. A session stream requires a
+# single-use WebSocket ticket, which requires a paired device — which the
+# operator does not have at the point they are verifying the tunnel. Probing
+# /sessions/<id>/stream therefore returns 401 before the handshake is even
+# attempted, so it proves nothing about Upgrade headers; the daemon exposes
+# /health/ws for exactly this check instead.
 key="$(head -c 16 /dev/urandom | base64)"
 status="$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 \
   -H "Connection: Upgrade" \
   -H "Upgrade: websocket" \
   -H "Sec-WebSocket-Version: 13" \
   -H "Sec-WebSocket-Key: ${key}" \
-  "https://${HOST}/sessions/probe/stream" 2>/dev/null || echo "000")"
+  "https://${HOST}/health/ws" 2>/dev/null || echo "000")"
 
 case "$status" in
   101) pass "WebSocket upgrade accepted through the tunnel (101)" ;;
-  404) pass "WebSocket route reached the daemon through the tunnel (404 for a nonexistent session)" ;;
   000) fails "no response to the WebSocket upgrade attempt" ;;
+  404) fails "/health/ws is missing — the daemon behind the tunnel is older than this script" ;;
   *)   fails "WebSocket upgrade returned ${status}; a proxy may be stripping Upgrade headers" ;;
 esac
 
-# 4. The daemon must not be reachable on a public port directly. If it is, the
+# 4. Session streams must NOT be reachable without a ticket. This is the other
+# half of the check above: /health/ws is open by design, and that is only
+# acceptable while the real streams stay shut.
+session_status="$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 \
+  -H "Connection: Upgrade" \
+  -H "Upgrade: websocket" \
+  -H "Sec-WebSocket-Version: 13" \
+  -H "Sec-WebSocket-Key: ${key}" \
+  "https://${HOST}/sessions/probe/stream" 2>/dev/null || echo "000")"
+
+if [[ "$session_status" == "401" ]]; then
+  pass "session streams refuse an unticketed upgrade (401)"
+else
+  fails "unticketed session stream returned ${session_status}, expected 401"
+fi
+
+# 5. The daemon must not be reachable on a public port directly. If it is, the
 # tunnel is not the only way in and the localhost-only guarantee is fiction.
 if curl -fsS --max-time 5 "http://${HOST}:8080/health" >/dev/null 2>&1; then
   fails "the daemon answers directly on port 8080 — it must only be reachable through the tunnel"

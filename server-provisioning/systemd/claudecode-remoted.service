@@ -9,6 +9,11 @@ Type=simple
 User=agent
 Group=agent
 
+# Lets the daemon create terminal locks in /run/claudecode-locks (1770
+# root:ccr-locks). systemd would pick this up from /etc/group anyway; naming it
+# here makes the dependency visible instead of implied.
+SupplementaryGroups=ccr-locks
+
 # Defaults first, then the operator's file, so .env overrides these rather than
 # the other way round. systemd applies Environment= and EnvironmentFile= in the
 # order they appear.
@@ -31,24 +36,25 @@ Environment=CCR_OWNER_TOTP_SECRET=
 # is fail-closed without those values rather than refusing to boot.
 EnvironmentFile=-/etc/claudecode-remote/.env
 
-# Every flag uses the --flag=${VAR} form, never --flag ${VAR}.
+# The owner credentials are NOT passed as flags. /proc/<pid>/cmdline is mode
+# 0444 — readable by every account on the machine, not just this service's own
+# user — so `--owner-password-hash=$argon2id$...` and `--owner-totp-secret=...`
+# on the command line hand the Argon2id hash and the raw TOTP seed to anything
+# that can run `ps`. With the seed, a second factor is no longer a second
+# factor. The daemon reads all four from its environment instead, which
+# /proc/<pid>/environ restricts to the owning uid and root.
 #
+# Every remaining flag uses the --flag=${VAR} form, never --flag ${VAR}.
 # systemd expands an unset or empty variable to *zero words*, so the space form
-# would hand the next argument to the previous flag: with no domain configured,
-# `--public-domain ${CCR_PUBLIC_DOMAIN} --owner-email ...` reaches the daemon as
-# `--public-domain=--owner-email`. The equals form yields `--public-domain=`,
-# an honest empty value. Unset is the default state of a fresh install, so this
-# is the normal path, not an edge case.
+# would hand the next argument to the previous flag: with no bind address
+# configured, `--addr ${CCR_BIND_ADDR} --db ...` reaches the daemon as
+# `--addr=--db`. The equals form yields `--addr=`, an honest empty value.
 ExecStart=/usr/local/bin/claudecode-remoted \
     --addr=${CCR_BIND_ADDR} \
     --db=/var/lib/claudecode-remote/daemon.db \
     --lock-dir=/run/claudecode-locks \
     --file-roots=/srv/exchange \
-    --upload-dir=/var/lib/claudecode-remote/uploads \
-    --public-domain=${CCR_PUBLIC_DOMAIN} \
-    --owner-email=${CCR_OWNER_EMAIL} \
-    --owner-password-hash=${CCR_OWNER_PASSWORD_HASH} \
-    --owner-totp-secret=${CCR_OWNER_TOTP_SECRET}
+    --upload-dir=/var/lib/claudecode-remote/uploads
 
 Restart=always
 RestartSec=5

@@ -49,6 +49,15 @@ func (s *Store) Device(id string) (ed25519.PublicKey, bool, bool) {
 	return ed25519.PublicKey(raw), dev.Revoked, true
 }
 
+// TouchDevice records that a device just authenticated, satisfying
+// DeviceToucher (device.go). Without a caller, `last_seen_at` stayed at its
+// pairing value forever and the device list — the thing an owner reads to
+// decide what to revoke — showed every device as last seen the day it was
+// paired.
+func (s *Store) TouchDevice(id string) error {
+	return s.db.TouchDevice(id)
+}
+
 // DeviceInfo mirrors a devices row for the /owner/devices response, without
 // exposing db.Device (and therefore package db) to owner.go.
 type DeviceInfo struct {
