@@ -72,7 +72,18 @@ fi
 mkdir -p "$STATE_DIR"
 if command -v pacman >/dev/null 2>&1; then
   CURRENT_KERNEL="$(uname -r)"
-  INSTALLED_KERNEL="$(pacman -Q linux 2>/dev/null | awk '{print $2}')"
+
+  # The `|| INSTALLED_KERNEL=""` is load-bearing. `pacman -Q linux` exits
+  # non-zero when no package is named exactly `linux`, and under `pipefail`
+  # that failure propagates out of the command substitution and `set -e` kills
+  # the script — after the update has run, but before the reboot flag is
+  # written and before anything is logged as finished.
+  #
+  # That is not a container quirk: anyone running linux-lts, linux-zen or
+  # linux-hardened has no package called `linux`, so the updater would appear
+  # to fail on every run on a perfectly ordinary Arch system. Found by the
+  # systemd harness; the older harness masked it by ending in `|| true`.
+  INSTALLED_KERNEL="$(pacman -Q linux 2>/dev/null | awk '{print $2}')" || INSTALLED_KERNEL=""
   if [[ -n "$INSTALLED_KERNEL" && "$INSTALLED_KERNEL" != *"${CURRENT_KERNEL%-arch*}"* ]]; then
     : > "${STATE_DIR}/reboot-pending"
     note "Kernel update detected, reboot-pending flag set (no automatic reboot)"

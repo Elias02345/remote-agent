@@ -35,6 +35,23 @@ rc_of() {
   echo "$rc"
 }
 
+# dump_journal_on_failure <unit> <rc> <journal>
+#
+# A red assertion that does not say why costs a full CI round trip to diagnose,
+# and this harness is the slowest job in the workflow. When a unit fails, print
+# its own journal and `systemctl status` immediately, so the next person reads
+# the cause instead of guessing at it.
+dump_journal_on_failure() {
+  local unit="$1" rc="$2" journal="$3"
+  [[ "$rc" -eq 0 ]] && return 0
+
+  echo "--- ${unit} failed (exit ${rc}); its journal follows ---"
+  echo "$journal"
+  echo "--- systemctl status ${unit} ---"
+  systemctl status "$unit" --no-pager --full 2>&1 || true
+  echo "--- end of ${unit} diagnostics ---"
+}
+
 # --- configuration -----------------------------------------------------------
 
 # Same dummy Ed25519 key run-tests.sh uses: provision.sh only checks the
@@ -103,6 +120,9 @@ rc=$(rc_of systemctl start idle-updater.service)
 assert_ok "systemctl start idle-updater.service runs to completion" "$rc"
 
 idle_journal="$(journalctl -u idle-updater.service --no-pager 2>&1)" || true
+# An assertion that fails without saying why costs a whole CI round trip to
+# diagnose. Dump the unit's own journal the moment it misbehaves.
+dump_journal_on_failure "idle-updater.service" "$rc" "$idle_journal"
 assert_contains "idle-updater journal shows the idle decision line" "$idle_journal" "System idle - starting update"
 assert_contains "idle-updater journal shows the update finishing" "$idle_journal" "Update finished"
 assert_contains "idle-updater journal proves CCR_SKIP_PACKAGE_UPDATES reached the unit via EnvironmentFile" \
@@ -124,6 +144,7 @@ rc=$(rc_of systemctl start claudecode-backup.service)
 assert_ok "systemctl start claudecode-backup.service runs to completion" "$rc"
 
 backup_journal="$(journalctl -u claudecode-backup.service --no-pager 2>&1)" || true
+dump_journal_on_failure "claudecode-backup.service" "$rc" "$backup_journal"
 assert_contains "backup journal shows the backup finishing" "$backup_journal" "Backup finished"
 
 export RESTIC_REPOSITORY=/srv/backups/restic
