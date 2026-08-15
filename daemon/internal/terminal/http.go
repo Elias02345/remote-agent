@@ -183,7 +183,7 @@ type serverMessage struct {
 var upgrader = websocket.Upgrader{
 	ReadBufferSize:  4096,
 	WriteBufferSize: 4096,
-	CheckOrigin: sameOriginOrNone,
+	CheckOrigin:     sameOriginOrNone,
 }
 
 // sameOriginOrNone is the upgrader's origin check.

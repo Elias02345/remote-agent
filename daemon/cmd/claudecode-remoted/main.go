@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io/fs"
@@ -586,10 +587,6 @@ func validatePublicDomain(domain string) error {
 	return nil
 }
 
-type bindError string
-
-func (e bindError) Error() string { return string(e) }
-
-const errWildcardBind = bindError(
+var errWildcardBind = errors.New(
 	"bind address must be localhost or a specific interface (e.g. the Tailscale IP), never a wildcard: " +
 		"public access is CloudGate's job")

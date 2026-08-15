@@ -44,9 +44,7 @@ class PtyTextDecoder {
     // Throwing here would end the terminal stream over one bad byte, and the
     // session would look dead while it is still running perfectly on the
     // server.
-    _sink = const Utf8Decoder(allowMalformed: true).startChunkedConversion(
-      ByteConversionSinkAdapter(_out),
-    );
+    _sink = const Utf8Decoder(allowMalformed: true).startChunkedConversion(_out);
   }
 
   final _out = _StringCollector();
@@ -78,18 +76,6 @@ class _StringCollector implements Sink<String> {
   }
 }
 
-/// Adapts a `Sink<String>` so the chunked UTF-8 decoder can write into it.
-class ByteConversionSinkAdapter implements Sink<String> {
-  ByteConversionSinkAdapter(this._target);
-  final Sink<String> _target;
-
-  @override
-  void add(String data) => _target.add(data);
-
-  @override
-  void close() => _target.close();
-}
-
 /// Exponential backoff for reconnects.
 ///
 /// Capped on purpose: an uncapped doubling turns a server restart into a
@@ -99,35 +85,25 @@ class Backoff {
   Backoff({
     this.initial = const Duration(milliseconds: 500),
     this.max = const Duration(seconds: 15),
-    this.factor = 2,
   });
 
   final Duration initial;
   final Duration max;
-  final int factor;
 
   int _attempt = 0;
 
   /// The delay before the next attempt.
   Duration next() {
-    final ms = initial.inMilliseconds * _pow(factor, _attempt);
-    _attempt++;
+    final ms = initial.inMilliseconds << _attempt;
+    // Stop shifting well before 64 bits run out. The cap below clamps the
+    // value anyway, so counting past this point changes nothing.
+    if (_attempt < 30) _attempt++;
     return ms >= max.inMilliseconds ? max : Duration(milliseconds: ms);
   }
 
   /// Call after a successful connection so the next drop starts from the
   /// short delay again.
   void reset() => _attempt = 0;
-
-  static int _pow(int base, int exp) {
-    var r = 1;
-    for (var i = 0; i < exp; i++) {
-      r *= base;
-      // Stop before overflowing; the cap in next() clamps anyway.
-      if (r > 1 << 30) return r;
-    }
-    return r;
-  }
 }
 
 /// A live connection to one session's byte stream.
