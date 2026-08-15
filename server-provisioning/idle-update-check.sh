@@ -99,11 +99,14 @@ if command -v pacman >/dev/null 2>&1; then
   fi
 fi
 
+# Both variants start with the same "Update finished" phrase on purpose: the
+# systemd harness greps the journal for it as the marker that a run completed,
+# and a failed sub-step still means the run completed — it means it completed
+# badly, which is what the rest of the line is for.
 if [[ "${#FAILURES[@]}" -gt 0 ]]; then
-  SUMMARY="update finished with ${#FAILURES[@]} failure(s): ${FAILURES[*]}"
-  note "WARNING: ${SUMMARY}"
+  SUMMARY="Update finished WITH ${#FAILURES[@]} FAILURE(S): ${FAILURES[*]}"
 else
-  SUMMARY="update finished"
+  SUMMARY="Update finished"
 fi
 
 if [[ -n "$NTFY_URL" ]]; then

@@ -155,3 +155,56 @@ fails with `Repository not found` — both were tested in Phase 0.
 ### ⚪ Review the English translation of the architecture doc
 - [ ] Review the English translation of `docs/ARCHITECTURE.md` against
       `docs/ARCHITECTURE.de.md` — the German file is the original record.
+
+### 🔴 Decide: should the daemon run under its own user?
+
+Today `claudecode-remoted` runs as `agent`, the same account the coding agents
+run under. That is one uid holding two very different trust levels, and it has
+two consequences the code cannot fix on its own:
+
+- The owner's Argon2id password hash and raw TOTP secret are in the daemon's
+  environment. They are out of the command line now (`/proc/<pid>/cmdline` is
+  world-readable) and out of tmux's environment, but `/proc/<pid>/environ` is
+  still readable by the same uid — so a coding agent that goes wrong, or is
+  prompt-injected, can read the second factor and pair a device of its own.
+- `/run/claudecode-locks` is `1770 root:ccr-locks` with the sticky bit, so no
+  *other* account can remove a lock. But the daemon and the agents share a uid,
+  so an agent can still delete a terminal lock the daemon created and let the
+  updater run underneath an open terminal.
+
+Fixing both properly means a separate `ccr-daemon` user, with the daemon
+starting tmux as `agent` through a narrow sudoers rule. That changes
+`docs/ARCHITECTURE.md`, which `CLAUDE.md` says is yours to decide, not mine.
+
+- [ ] Decide whether to split the users. If yes, this is a phase of its own —
+      it touches the unit, the installer, the sudoers drop-in and how the
+      daemon spawns tmux.
+
+### 🟡 Android release signing key
+Release builds now refuse to sign themselves with the debug key. A device that
+installs a debug-signed APK can never take a properly signed update afterwards,
+so the convenient fallback was worth removing.
+
+- [ ] Generate an upload keystore and write `app/android/key.properties`
+      (gitignored). Exact commands are in `app/README.md` under "Android".
+- [ ] Back the keystore up off the machine. Losing it means every installed
+      copy of the app has to be uninstalled before it can be updated.
+
+### 🟡 Trusted proxy address for rate limiting
+Behind CloudGate every request arrives from the tunnel's address, so per-IP
+rate limiting puts the entire internet in one bucket: an attacker never gets
+isolated, and their lockout blocks your own devices too.
+
+- [ ] Set `CCR_TRUSTED_PROXIES` in `/etc/claudecode-remote/.env` to the address
+      CloudGate connects from (a CIDR or a bare IP). Only then is
+      `CF-Connecting-IP` believed. Left empty, nothing is trusted and
+      `RemoteAddr` is used — safe, but not useful behind the tunnel.
+
+### 🟡 Restrict SSH to the Tailscale overlay
+Architecture Section 2.2 wants SSH reachable only over the private overlay.
+It is not the default because on a first run Tailscale is not up yet, and an
+sshd that cannot bind its address is a locked door with you on the outside.
+
+- [ ] Once `tailscale ip -4` returns an address, set `CCR_SSH_LISTEN_ADDRESS`
+      to it and re-run `provision.sh`. Verify a new session over the overlay
+      **before** closing the current one.
