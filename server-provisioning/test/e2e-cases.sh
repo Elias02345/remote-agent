@@ -110,6 +110,33 @@ assert_contains "systemctl list-timers shows idle-updater.timer" "$timers" "idle
 assert_contains "systemctl list-timers shows claudecode-backup.timer" "$timers" "claudecode-backup.timer"
 
 echo
+echo "== Lock directory permissions (the real ones, as the real user) =="
+
+# The session-lifecycle block further down runs the daemon as root against a
+# lock directory in /tmp, so it proves the lock *logic* and nothing at all
+# about the production directory's permissions. That distinction is exactly
+# where the bug lived: /run/claudecode-locks was created 0755 root:root while
+# both writers — agent-run and the daemon — run unprivileged, so neither could
+# ever create a lock and the whole scheme was inert.
+#
+# So these assertions use `sudo -u` against the real path.
+lock_mode="$(stat -c '%a %U:%G' /run/claudecode-locks 2>&1)" || lock_mode="missing"
+assert_eq "/run/claudecode-locks is 1770 root:ccr-locks" "1770 root:ccr-locks" "$lock_mode"
+
+rc=$(rc_of sudo -u agent touch /run/claudecode-locks/terminal-e2e-probe)
+assert_ok "the agent user can create a terminal lock" "$rc"
+
+# The sticky bit is the reason for 1770 rather than 0770: a member of the
+# group may remove its own locks and nobody else's. Root's lock stands in for
+# a lock owned by another account.
+touch /run/claudecode-locks/terminal-root-owned
+rc=$(rc_of sudo -u agent rm -f /run/claudecode-locks/terminal-root-owned)
+assert_fails "the agent user cannot delete another account's lock (sticky bit)" "$rc"
+assert_exists "the other account's lock survived the attempt" /run/claudecode-locks/terminal-root-owned
+
+rm -f /run/claudecode-locks/terminal-root-owned /run/claudecode-locks/terminal-e2e-probe
+
+echo
 echo "== idle-updater.service: the assertion that matters most =="
 
 # `systemctl start` on a Type=oneshot unit blocks until ExecStart finishes
