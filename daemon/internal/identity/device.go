@@ -122,18 +122,54 @@ func (a *DeviceAuthenticator) now() time.Time {
 // nothing in this codebase needs several challenges in flight for the same
 // device at once, and tracking a set would be unused flexibility. Add a
 // per-challenge-id keyed map if a future flow needs concurrent challenges.
+// A challenge is only ever *stored* for a device that actually exists and is
+// not revoked. An unknown device still gets a perfectly ordinary-looking nonce
+// back — it simply will not verify later.
+//
+// That asymmetry does two jobs at once:
+//
+//   - It keeps the endpoint from leaking which device ids exist. Returning an
+//     error for an unknown device would turn /auth/challenge into an
+//     enumeration oracle, which is exactly what Verify goes to some trouble to
+//     avoid.
+//   - It bounds the map by the number of paired devices instead of by the
+//     number of requests. /auth/challenge is unauthenticated by necessity, so
+//     without this an attacker could POST a few million random device ids and
+//     grow `pending` until the daemon is killed for memory. Sweeping alone
+//     would not help: entries live for ChallengeTTL, and an attacker can
+//     create them faster than they expire.
 func (a *DeviceAuthenticator) IssueChallenge(deviceID string) ([]byte, error) {
 	nonce := make([]byte, ChallengeSize)
 	if _, err := rand.Read(nonce); err != nil {
 		return nil, fmt.Errorf("generate challenge for device %s: %w", deviceID, err)
 	}
+
+	_, revoked, known := a.lookup.Device(deviceID)
+	if !known || revoked {
+		return nonce, nil
+	}
+
 	a.mu.Lock()
+	a.sweepLocked()
 	a.pending[deviceID] = &pendingChallenge{
 		nonce:     nonce,
 		expiresAt: a.now().Add(ChallengeTTL),
 	}
 	a.mu.Unlock()
 	return nonce, nil
+}
+
+// sweepLocked drops expired challenges. Called with a.mu held.
+//
+// The bound above already keeps the map small, but an expired entry is dead
+// weight either way and this is the natural place to notice it.
+func (a *DeviceAuthenticator) sweepLocked() {
+	now := a.now()
+	for id, c := range a.pending {
+		if now.After(c.expiresAt) {
+			delete(a.pending, id)
+		}
+	}
 }
 
 // Verify checks signature against deviceID's outstanding challenge.

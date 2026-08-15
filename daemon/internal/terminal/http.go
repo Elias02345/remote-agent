@@ -8,6 +8,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -23,9 +24,13 @@ import (
 //	PATCH  /sessions/{id}         rename
 //	GET    /sessions/{id}/stream  WebSocket, raw byte passthrough
 //
-// There is NO authentication here yet — that is Phase 7. Until then the fact
-// that the daemon binds to localhost only is the entire access control story,
-// which is why the bind address is not configurable to anything wider.
+// These handlers carry no authentication of their own. That is deliberate and
+// not a gap: `cmd/claudecode-remoted` wraps this whole mux in
+// `identity.RequireDevice`, so the check happens once, in one place, for the
+// terminal API and the file API alike. Adding a second check here would give
+// two places to keep in agreement.
+//
+// The consequence is that this mux must never be mounted directly.
 func (m *Manager) Routes() *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/sessions", m.handleSessions)
@@ -178,11 +183,40 @@ type serverMessage struct {
 var upgrader = websocket.Upgrader{
 	ReadBufferSize:  4096,
 	WriteBufferSize: 4096,
-	// Same-origin checking is meaningless while the daemon is reachable only
-	// on localhost and has no auth at all (Phase 7 adds device
-	// challenge-response). Revisit this together with authentication rather
-	// than pretending an origin check is protecting anything today.
-	CheckOrigin: func(*http.Request) bool { return true },
+	CheckOrigin: sameOriginOrNone,
+}
+
+// sameOriginOrNone is the upgrader's origin check.
+//
+// A WebSocket handshake is not subject to the same-origin policy, so without
+// this any page the operator visits could open a socket to the daemon and have
+// the browser attach its ambient credentials — cross-site WebSocket hijacking.
+// The single-use ticket already blocks the attack (a hostile page cannot obtain
+// one), but relying on a single control for something this cheap to check twice
+// is how a later refactor quietly removes the only guard.
+//
+// The rule:
+//
+//   - No Origin header at all — allow. Native clients (the Flutter app, curl,
+//     the Go tests) do not send one; only browsers do. An absent Origin is
+//     therefore not a browser and not a cross-site request.
+//   - Origin's host equals the request's Host — allow. This is self-configuring:
+//     it works for 127.0.0.1:8080 in development and for the public domain
+//     behind the tunnel, with nothing to keep in sync.
+//   - Anything else — refuse.
+func sameOriginOrNone(r *http.Request) bool {
+	origin := r.Header.Get("Origin")
+	if origin == "" {
+		return true
+	}
+	u, err := url.Parse(origin)
+	if err != nil {
+		return false
+	}
+	// Compare hosts, not the full URL: the tunnel terminates TLS at
+	// Cloudflare's edge and forwards plaintext, so the scheme the browser saw
+	// (https) is not the scheme this daemon sees.
+	return strings.EqualFold(u.Host, r.Host)
 }
 
 // handleStream pumps raw bytes between the client and a tmux attachment.

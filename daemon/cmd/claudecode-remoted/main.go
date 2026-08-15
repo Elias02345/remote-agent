@@ -307,7 +307,58 @@ func newRouter(cfg routerConfig) (wiredRouter, error) {
 	}
 	root.Handle("/", http.FileServer(http.FS(sub)))
 
-	return wiredRouter{Handler: root, DeviceAuth: deviceAuth, StepUp: stepUpGate, Owner: owner}, nil
+	handler := secureHeaders(limitRequestBody(root))
+
+	return wiredRouter{Handler: handler, DeviceAuth: deviceAuth, StepUp: stepUpGate, Owner: owner}, nil
+}
+
+// maxJSONBody caps request bodies on everything except file uploads. Every
+// other endpoint here takes a small JSON object; a megabyte is already orders
+// of magnitude more than any of them need.
+const maxJSONBody = 1 << 20
+
+// limitRequestBody stops an unauthenticated caller from making the daemon
+// allocate arbitrary memory by streaming an endless body at a JSON endpoint.
+// `json.Decoder` reads until EOF, so without a cap "POST /auth/challenge" with
+// an infinite body is a memory exhaustion primitive that needs no credentials.
+//
+// The upload path is deliberately exempt: it streams chunks straight to disk
+// rather than buffering them, and capping it here would cap the file size for
+// no benefit.
+func limitRequestBody(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasPrefix(r.URL.Path, "/files/upload") {
+			r.Body = http.MaxBytesReader(w, r.Body, maxJSONBody)
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// secureHeaders sets the response headers a browser needs to not do something
+// unhelpful with our responses.
+//
+// The API returns JSON and the only HTML is the local test client, so these are
+// cheap. The one that matters most is nosniff: without it a browser may decide
+// a JSON error body containing attacker-influenced text is HTML and run it.
+func secureHeaders(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		h := w.Header()
+		h.Set("X-Content-Type-Options", "nosniff")
+		h.Set("X-Frame-Options", "DENY")
+		h.Set("Referrer-Policy", "no-referrer")
+		// The WebSocket ticket travels in the query string. Without this, a
+		// click from the test client would leak it in a Referer header.
+		h.Set("Cross-Origin-Opener-Policy", "same-origin")
+
+		// A strict CSP would break the test client, which loads xterm.js from a
+		// CDN by design (it is a development tool, not a shipping UI). Scope the
+		// policy to the API responses, where nothing should ever be executed.
+		if !strings.HasPrefix(r.URL.Path, "/static") && r.URL.Path != "/" {
+			h.Set("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'")
+		}
+
+		next.ServeHTTP(w, r)
+	})
 }
 
 // wrapSessionAuth applies device authentication to termMux. Every request
