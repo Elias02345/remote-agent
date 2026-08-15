@@ -23,19 +23,20 @@ class PairingStart {
   final List<String> outstanding;
 }
 
-/// Result of one poll. Either [completed] is true and [deviceId] is set, or
-/// it is false and [outstanding] lists what is still missing.
+/// Result of one poll. Either every factor is done ([ready]) or
+/// [outstanding] lists what the browser flow still has to satisfy.
+///
+/// Carries no device id: obtaining that is [PairingClient.complete]'s job,
+/// and a poll deliberately cannot consume the attempt.
 class PairingPoll {
-  const PairingPoll._({required this.completed, this.deviceId, this.outstanding = const []});
+  const PairingPoll._({required this.ready, this.outstanding = const []});
 
-  factory PairingPoll.completed(String deviceId) =>
-      PairingPoll._(completed: true, deviceId: deviceId);
+  factory PairingPoll.ready() => const PairingPoll._(ready: true);
 
   factory PairingPoll.outstanding(List<String> outstanding) =>
-      PairingPoll._(completed: false, outstanding: outstanding);
+      PairingPoll._(ready: false, outstanding: outstanding);
 
-  final bool completed;
-  final String? deviceId;
+  final bool ready;
   final List<String> outstanding;
 }
 
@@ -73,40 +74,49 @@ class PairingClient {
     return PairingStart(pairingId: pairingId, outstanding: _factors(body['outstanding']));
   }
 
-  /// Polls whether pairing has finished.
+  /// Polls how far the browser flow has got.
   ///
-  /// The daemon has no separate status route — attempting
-  /// `/owner/pair/complete` before every factor is satisfied *is* the status
-  /// check: it answers 409 with whatever factors remain instead of pairing
-  /// the device (`daemon/internal/identity/owner.go`, `handlePairComplete`).
-  /// Calling it repeatedly is therefore both how completion is detected and
-  /// how it is actually finished — there is no separate "now complete it"
-  /// step once the last factor lands.
+  /// Deliberately a read, not an attempt to finish. `/owner/pair/complete`
+  /// would also answer 409 with the outstanding factors and could be polled
+  /// instead — but it is the call that consumes the attempt and hands back
+  /// the device id, and polling a consuming endpoint every two seconds means
+  /// the completing call is whichever poll happened to land first. If its
+  /// response were then lost on the wire, the attempt would already be spent
+  /// and the device id gone with it, with no way to ask again.
+  ///
+  /// Reading the status separately keeps exactly one call that consumes the
+  /// attempt, made once, at a moment the caller chose.
   Future<PairingPoll> poll(String pairingId) async {
+    final res = await _http.get(
+      baseUri.replace(path: '/owner/pair/status', queryParameters: {'pairing_id': pairingId}),
+    );
+    if (res.statusCode != 200) {
+      throw ApiException(res.statusCode, _message(res));
+    }
+    final body = _decodeMap(res);
+    if (body['completed'] == true) {
+      return PairingPoll.ready();
+    }
+    return PairingPoll.outstanding(_factors(body['outstanding']));
+  }
+
+  /// Finishes pairing and returns the device id. Call once, after [poll]
+  /// reports every factor satisfied — this consumes the attempt, so a second
+  /// call answers 404 rather than repeating the answer.
+  Future<String> complete(String pairingId) async {
     final res = await _http.post(
       baseUri.replace(path: '/owner/pair/complete'),
       headers: const {'Content-Type': 'application/json'},
       body: jsonEncode({'pairing_id': pairingId}),
     );
-
-    if (res.statusCode == 200) {
-      final body = _decodeMap(res);
-      final deviceId = body['device_id'];
-      if (deviceId is! String) {
-        throw const ApiException(500, 'daemon reported success with no device_id');
-      }
-      return PairingPoll.completed(deviceId);
+    if (res.statusCode != 200) {
+      throw ApiException(res.statusCode, _message(res));
     }
-    if (res.statusCode == 409) {
-      final body = _decodeMap(res);
-      // A 409 also covers "pairing already completed elsewhere" (no
-      // 'outstanding' key); that is not this poll's problem to solve, so it
-      // surfaces as an empty list rather than a thrown error — the caller
-      // keeps waiting and a fresh /owner/pair/start is how a user actually
-      // recovers from it.
-      return PairingPoll.outstanding(_factors(body['outstanding']));
+    final deviceId = _decodeMap(res)['device_id'];
+    if (deviceId is! String) {
+      throw const ApiException(500, 'daemon reported success with no device_id');
     }
-    throw ApiException(res.statusCode, _message(res));
+    return deviceId;
   }
 
   void close() => _http.close();

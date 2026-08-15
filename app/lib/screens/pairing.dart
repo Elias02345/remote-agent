@@ -144,9 +144,15 @@ class _PairingScreenState extends State<PairingScreen> {
       final result = await client.poll(pairingId);
       if (generation != _generation || !mounted) return;
 
-      if (result.completed) {
+      if (result.ready) {
+        // Stop the timer before completing, not after: complete() consumes
+        // the attempt, so a second tick firing while it is in flight would
+        // find the attempt already gone and report a failure for a pairing
+        // that actually succeeded.
         _pollTimer?.cancel();
-        await widget.identity.storeDeviceId(result.deviceId!);
+        final deviceId = await client.complete(pairingId);
+        if (generation != _generation || !mounted) return;
+        await widget.identity.storeDeviceId(deviceId);
         if (generation != _generation || !mounted) return;
         setState(() => _phase = _Phase.paired);
         widget.onPaired();

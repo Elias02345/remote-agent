@@ -5,11 +5,13 @@ Linux from one Flutter codebase, `xterm.dart` for terminal emulation. Web is
 not a supported target — it was dropped rather than carried as a fourth
 platform nobody was testing.
 
-> **Status: Phase 10 (device pairing) in progress.** Key generation, secure
+> **Status: Phase 10 (device pairing) built.** Key generation, secure
 > storage, per-request challenge signing and the pairing screen
-> (`lib/screens/pairing.dart`) are built and tested; see
-> [What's not built](#whats-not-built-and-why) for what is still missing on
-> top of that.
+> (`lib/screens/pairing.dart`) are in place and tested. The three factors
+> are completed in the system browser against the daemon's own pairing
+> page — WebAuthn is a browser API, and keeping the password out of this
+> app means a compromised app never sees it. See
+> [What's not built](#whats-not-built-and-why) for what remains.
 
 ## Running it
 
@@ -45,11 +47,6 @@ type between releases, so a different SDK reports argument-type errors in
 CI also builds every platform target — Linux on the Ubuntu runner, Windows on
 its own runner. `analyze` and `test` never touch a platform runner, so they
 cannot tell you whether the app still builds for one.
-
-`.github/workflows/ci.yml` still has a `flutter build web --release` step
-left over from before Web was dropped as a target; that is outside `app/`
-and was not touched here, but it will fail the next time CI runs against
-this branch until it is removed.
 
 ## What Phase 9 added
 
@@ -95,7 +92,8 @@ this branch until it is removed.
   to `/sessions/{id}/ticket`, which the daemon has never served.
 - **`lib/screens/pairing.dart`** — walks `/owner/pair/start` →
   (password/TOTP/passkey, completed in the system browser, never in this
-  app) → polling → `/owner/pair/complete`, then stores the device_id and
+  app) → polling `GET /owner/pair/status` → one `POST /owner/pair/complete`,
+  then stores the device_id and
   hands control back to `main.dart`. Includes an address entry step when
   none is configured yet, and a "forget this device" action.
 - **`lib/main.dart`** now routes to `PairingScreen` until both a device_id
@@ -142,22 +140,18 @@ shared file belongs to. That is app navigation rather than upload plumbing.
 
 ## What's not built and why
 
-- **The daemon has no `/owner/pair/status` route.** The pairing screen polls
-  completion by calling `POST /owner/pair/complete` every two seconds instead
-  (`lib/api/pairing_client.dart`): the daemon has no separate status
-  endpoint, and that call already answers with a 409 and the remaining
-  factors when pairing is not finished yet
-  (`daemon/internal/identity/owner.go`, `handlePairComplete`), so it doubles
-  as the status check. If a `/owner/pair/status` route is added later this
-  can switch to polling that instead, but there is nothing in the current
-  daemon build for it to call.
 - **The file browser screen is not built.** `lib/api/` has the client for it
   and it is tested; no screen uses it. `ROADMAP.md` Phase 8 listed it in scope.
-- **FIDO2 / hardware-key support is blocked on D-04** (`ROADMAP.md`), the
-  WebAuthn relying-party domain. A passkey is bound to a domain; there is
-  nothing to register a credential against until that's decided, so this
-  isn't stubbed — a stub would be a WebAuthn flow with nowhere to point,
-  which is worse than an honest gap.
+- **Passkeys need `CCR_PUBLIC_DOMAIN` set before they work at all** (D-04 in
+  `ROADMAP.md`). The registration and assertion paths are built now, but a
+  passkey is cryptographically bound to a relying-party ID, and this repo
+  ships no default domain — a guessed one could reach production, and an RP
+  ID cannot be changed afterwards without invalidating every passkey already
+  registered. Until the operator sets it, every passkey path fails closed and
+  pairing cannot complete. That is the intended behaviour, not a gap.
+- **No end-to-end run against a real authenticator.** The authorisation rules
+  around registration are unit-tested; a full ceremony needs a real browser
+  and a real authenticator against a real domain, which nothing in CI has.
 - **Push notifications are not added client-side.** Update summaries,
   pending-reboot notices, and failed-update errors already go out server-side
   via ntfy (architecture Section 4.5, `D-03` in `ROADMAP.md`). A Flutter

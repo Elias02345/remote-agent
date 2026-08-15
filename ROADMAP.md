@@ -19,7 +19,9 @@ the open decisions made during the phase — only then the next phase.
 | 6 | CloudGate connection | blocked on real deployment (D-04 resolved: `CCR_PUBLIC_DOMAIN` is now first-run config) |
 | 7 | Security layer | done (passkey inactive until the operator sets `CCR_PUBLIC_DOMAIN`) |
 | 8 | Client app skeleton | done |
-| 9 | Android & polish | done (Android glue outstanding) |
+| 9 | Android & polish | done |
+| 10 | Device pairing end to end | done (needs one manual passkey run) |
+| 11 | Daemon under its own user | planned |
 
 ---
 
@@ -221,7 +223,7 @@ another simulated client.
 **Not met:** the file browser screen. The file *API client* exists and is
 tested; there is no screen in `lib/screens/` that uses it.
 
-## Phase 9 — Android & polish · `in progress`
+## Phase 9 — Android & polish · `done`
 
 **Built:** the mobile control bar with a latching Ctrl (which is what makes
 Ctrl+C reachable on a touch keyboard at all), the tus upload client with the
@@ -229,26 +231,67 @@ client-side half of the SHA-256 double check, the share-to-session flow, the
 `app/android/` platform project, and the Kotlin share-sheet bridge — verified
 by building an APK and reading its merged manifest, not by inspection.
 
-**Not built:** device pairing in the app. This is the gap that matters most in
-the whole project right now, so it is stated plainly rather than buried: the
-daemon's pairing chain is complete and fail-closed, and the client has no way
-to walk it. There is no Ed25519 key generation, no platform-backed key storage,
-no challenge signing, no pairing screen, and no server-address setting — the
-app defaults to its own loopback address. A device therefore cannot
-authenticate to a daemon that has authentication switched on.
+**Not built:** the session picker that decides which session a shared file
+belongs to, and the file browser screen. Both are app navigation rather than
+protocol work.
 
-The WebAuthn side is unreachable from either end: `webauthn.go` can verify an
-assertion, but nothing calls `BeginRegistration` or `BindSession`, no
-credential is persisted, and there are no registration endpoints. The passkey
-factor is fail-closed, so this makes pairing impossible rather than weak — but
-"impossible" is not "done".
+## Phase 10 — Device pairing end to end · `done`
 
-Revocation has the same shape: it sits behind a single-use step-up grant and
-no production code path issues one.
+This closes the two findings the security review left open, which were the
+largest gaps in the project.
 
-**Deliberately not built, with reasons:** FIDO2 hardware keys, because a
-passkey binds to a domain and no installation has one configured yet (D-04).
-Client-side push, because ntfy already carries it server-side.
+**Client (H1).** The app had no way to authenticate at all. It now generates
+an Ed25519 keypair once and keeps it in `flutter_secure_storage` — Android
+Keystore, Windows DPAPI, libsecret — so a phone backup cannot carry away a
+working device identity. Every request signs a fresh challenge. The daemon's
+address is asked for and persisted instead of defaulting to the client's own
+loopback address, which on a phone meant the phone. Fixing this also turned
+up `streamTicket` posting to `/sessions/{id}/ticket`, a route the daemon has
+never served.
+
+**Passkeys (H2).** `webauthn.go` could verify an assertion, but nothing ever
+registered one, so the third factor was unsatisfiable and pairing was
+impossible rather than merely hard. Credentials are now persisted, the
+verifier is stateless (it used to hold one in-flight session on the struct,
+so two overlapping ceremonies could validate against each other's
+challenge), and the pairing chain's passkey step has its own begin/finish
+pair that refuses to start until password and TOTP are already satisfied for
+that attempt.
+
+**The registration rule, stated once because it is the load-bearing part:**
+while zero passkeys exist, registration is reachable unauthenticated but
+gated on email + password + TOTP. The moment the first one is registered that
+door shuts permanently — the bootstrap body is refused even when correct, and
+every further passkey must come through device auth plus a single-use step-up
+grant. The credential count is read fresh on every request; caching it would
+leave a stale "still zero" window open after the first registration.
+
+**Web was dropped as a target.** A browser cannot hold a hardware-backed key,
+and carrying a fourth platform whose identity story is strictly weaker than
+the other three was not worth it. WebAuthn still happens in a browser — the
+three factors are completed on the daemon's own pairing page, which also
+keeps the owner's password out of the app entirely.
+
+**Definition of Done:** a device pairs only after all three factors; an
+already-paired device reaches the API on its Ed25519 key alone; revocation
+demands step-up. The first two are covered by tests; the third was closed in
+the previous phase.
+
+**Not met:** no end-to-end run against a real authenticator. The
+authorisation rules are unit-tested, but a full WebAuthn ceremony needs a
+real browser and a real security key against a real domain, which no CI
+runner here has. This needs `CCR_PUBLIC_DOMAIN` set and one manual pass.
+
+## Phase 11 — Daemon under its own user · `planned`
+
+The daemon runs as `agent`, the same uid as the coding agents. They can
+therefore read the owner's TOTP secret out of `/proc/<pid>/environ` and
+delete terminal locks the daemon created — the sticky bit does not separate
+two processes sharing a uid. Closing this means a `ccr-daemon` user and
+starting tmux as `agent` through a narrow sudoers rule, which changes
+`docs/ARCHITECTURE.md` and so was deferred to its own phase on the owner's
+decision. Tracked in `TODO_FOR_USER.md`.
+
 
 **Scope:** Mobile control bar, native copy-paste UX, share-sheet integration
 for file uploads, FIDO2 hardware key support as a Linux fallback,
